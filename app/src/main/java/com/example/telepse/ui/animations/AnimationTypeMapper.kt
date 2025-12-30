@@ -21,6 +21,8 @@ object AnimationTypeMapper {
      * - "Pop and Shoot" or "Shoot and Pop" -> AnimationType.POP_AND_SHOOT
      * - "Fall" -> AnimationType.FALL
      * - "Burst" -> AnimationType.BURST
+     * - "Screen Shock" -> AnimationType.SCREEN_SHOCK
+     * - "Float" -> AnimationType.FLOAT
      * 
      * @param styleName The style name from the backend (e.g., "Confetti", "Pop and Shoot")
      * @return The corresponding AnimationType, defaults to CONFETTI if not recognized
@@ -33,6 +35,8 @@ object AnimationTypeMapper {
             "pop and shoot", "shoot and pop", "popandshoot", "shootandpop" -> AnimationType.POP_AND_SHOOT
             "fall" -> AnimationType.FALL
             "burst" -> AnimationType.BURST
+            "screen shock", "screenshock" -> AnimationType.SCREEN_SHOCK
+            "float" -> AnimationType.FLOAT
             else -> {
                 // Default to confetti for unknown styles
                 AnimationType.CONFETTI

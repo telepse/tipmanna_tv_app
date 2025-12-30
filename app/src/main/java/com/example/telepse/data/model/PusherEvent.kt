@@ -7,24 +7,15 @@ import kotlinx.serialization.Serializable
  * 
  * This event is fired when a user makes a payment/tip.
  * Contains information about the selected characters and their animations.
+ * 
+ * Note: selectedTips is an array of character names (strings), not objects.
+ * The app will match these names against the event's character list.
  */
 @Serializable
 data class TipAnimationEvent(
-    val selectedTips: List<SelectedTip>,
+    val selectedTips: List<String>, // Array of character names
     val amount: Double,
     val sender: String
-)
-
-/**
- * Represents a single selected tip/character in the tip-animation event.
- */
-@Serializable
-data class SelectedTip(
-    val characterId: String,
-    val styleName: String,
-    val name: String,
-    val price: Double,
-    val time: String
 )
 
 /**

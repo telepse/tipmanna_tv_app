@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.telepse.ui.animations.particle.*
 
@@ -40,6 +41,34 @@ fun CharacterAnimation(
     val screenWidth = configuration.screenWidthDp.dp
     val screenHeight = configuration.screenHeightDp.dp
     
+    // Screen Shock uses a different rendering approach
+    if (animationType == AnimationType.SCREEN_SHOCK) {
+        val icons = generateScreenShockIcons(
+            imageUrl = imageUrl,
+            config = config,
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+            glowOrigin = "bottom" // Default to bottom, can be made configurable
+        )
+        
+        // Trigger completion callback after animation duration (6000ms for Screen Shock)
+        LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(6000L + 300L) // 6000ms + 300ms buffer
+            onAnimationComplete?.invoke()
+        }
+        
+        Box(modifier = modifier.fillMaxSize()) {
+            ScreenShockAnimation(
+                icons = icons,
+                screenWidth = screenWidth,
+                screenHeight = screenHeight,
+                intensity = 32f, // Default intensity
+                durationMillis = 6000 // Web version uses 6000ms
+            )
+        }
+        return
+    }
+    
     // Generate particles based on animation type
     val particles = when (animationType) {
         AnimationType.CONFETTI -> generateConfettiParticles(
@@ -66,23 +95,57 @@ fun CharacterAnimation(
             screenWidth = screenWidth,
             screenHeight = screenHeight
         )
+        AnimationType.FLOAT -> generateFloatParticles(
+            imageUrl = imageUrl,
+            config = config,
+            screenWidth = screenWidth,
+            screenHeight = screenHeight
+        )
+        AnimationType.SCREEN_SHOCK -> emptyList() // Handled above
     }
     
     // Trigger completion callback after animation duration
     // Add extra time to ensure particles have fully faded out and are removed from composition
     LaunchedEffect(Unit) {
-        // Wait for full animation duration + fade out time
-        val totalDuration = config.durationMillis + config.startDelayMillis + 300 // Extra 300ms buffer
+        // For Fall animation, use 6000ms duration (web version)
+        val animationDuration = when (animationType) {
+            AnimationType.FALL -> 6000
+            else -> config.durationMillis
+        }
+        val totalDuration = animationDuration + config.startDelayMillis + 300 // Extra 300ms buffer
         kotlinx.coroutines.delay(totalDuration.toLong())
         onAnimationComplete?.invoke()
     }
     
     Box(modifier = modifier.fillMaxSize()) {
         particles.forEach { particle ->
+            // For Fall animation, use variable sizes (40-90dp) and 6000ms duration
+            val particleSize: Dp
+            val duration: Int
+            val minSize: Dp?
+            val maxSize: Dp?
+            
+            when (animationType) {
+                AnimationType.FALL -> {
+                    minSize = 40.dp
+                    maxSize = 90.dp
+                    particleSize = config.particleSize
+                    duration = 6000 // Web version uses 6000ms
+                }
+                else -> {
+                    minSize = null
+                    maxSize = null
+                    particleSize = config.particleSize
+                    duration = config.durationMillis
+                }
+            }
+            
             AnimatedParticle(
                 particle = particle,
-                size = config.particleSize,
-                durationMillis = config.durationMillis
+                size = particleSize,
+                durationMillis = duration,
+                minSize = minSize,
+                maxSize = maxSize
             )
         }
     }

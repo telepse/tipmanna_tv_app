@@ -23,6 +23,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -51,6 +53,13 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.zIndex
+import android.widget.Toast
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.scrollable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.text.style.TextAlign
+import com.example.telepse.data.model.TipUsageDisclosure
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -61,6 +70,21 @@ fun FundraisingMilestoneScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+    
+    // Show toast messages - track last shown message to avoid duplicates
+    var lastShownToast by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(uiState.toastMessage) {
+        uiState.toastMessage?.let { message ->
+            if (message != lastShownToast) {
+                try {
+                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                    lastShownToast = message
+                } catch (e: Exception) {
+                    android.util.Log.e("FundraisingMilestoneScreen", "Error showing toast", e)
+                }
+            }
+        }
+    }
     
     // Fetch event details
     LaunchedEffect(eventId) {
@@ -135,9 +159,9 @@ fun FundraisingMilestoneScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    // Header Text
+                    // Header Text - Change based on showLatestAmount
                     Text(
-                        text = "Together you've sent",
+                        text = if (event.showLatestAmount == true) "Latest amount raised" else "Together you've sent",
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Medium,
                         color = Color.White,
@@ -151,18 +175,32 @@ fun FundraisingMilestoneScreen(
                         fontSize = 56.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
-                        modifier = Modifier.padding(bottom = 32.dp)
+                        modifier = Modifier.padding(bottom = 8.dp)
                     )
                     
-                    // Progress Bar Section
-                    ProgressBarSection(
-                        amountRaised = amountRaised,
-                        amountToRaise = event.amountToRaise?.toInt() ?: 0,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    // Tip Usage Disclosure - Auto-scrolling text
+                    event.tipUsageDisclosure?.let { disclosures ->
+                        if (disclosures.isNotEmpty()) {
+                            ScrollingTipUsageText(
+                                disclosures = disclosures,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 24.dp)
+                            )
+                        }
+                    }
                     
-                    // Spacing between tipmanna.live and event title (reduced by half)
-                    Spacer(modifier = Modifier.height(40.dp))
+                    // Progress Bar Section - Hide when hideProgressBarAmount is true
+                    if (event.hideProgressBarAmount != true) {
+                        ProgressBarSection(
+                            amountRaised = amountRaised,
+                            amountToRaise = event.amountToRaise?.toInt() ?: 0,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    
+                    // Spacing between tipmanna.live and event title (reduced)
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
                 
                 Spacer(modifier = Modifier.weight(1f))
@@ -201,17 +239,17 @@ fun FundraisingMilestoneScreen(
                     
                     Spacer(modifier = Modifier.height(16.dp))
                     
-                    // QR Code
+                    // QR Code - Increased size for better scanability
                     event.scanLink?.let { scanLink ->
                         QRCodeImage(
                             content = scanLink,
-                            modifier = Modifier.size(120.dp)
+                            modifier = Modifier.size(200.dp) // Increased from 120.dp to 200.dp
                         )
                     } ?: run {
                         // Fallback if no scanLink
                         Box(
                             modifier = Modifier
-                                .size(120.dp)
+                                .size(200.dp) // Increased from 120.dp to 200.dp
                                 .background(Color.White, RoundedCornerShape(8.dp))
                                 .border(2.dp, Color.White, RoundedCornerShape(8.dp)),
                             contentAlignment = Alignment.Center
@@ -224,40 +262,19 @@ fun FundraisingMilestoneScreen(
                         }
                     }
                 }
-                
-                // Bottom Navigation
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Shaking speaker icon (Bottom Left)
-                    Box(modifier = Modifier.size(48.dp)) {
-                        ShakingSpeakerIcon(
-                            modifier = Modifier.size(40.dp),
-                            contentDescription = "Speaker"
-                        )
-                    }
-                    
-                    // Progress Indicator Dots (Bottom Center)
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.align(Alignment.CenterVertically)
-                    ) {
-                        repeat(3) { index ->
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .background(
-                                        color = if (index == 0) Color.White else Color.White.copy(alpha = 0.5f),
-                                        shape = androidx.compose.foundation.shape.CircleShape
-                                    )
-                            )
-                        }
-                    }
-                }
+            }
+            
+            // Megaphone icon - Positioned absolutely at bottom left of screen
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 16.dp, bottom = 16.dp)
+                    .zIndex(100f) // Ensure it's above other content but below animations
+            ) {
+                ShakingSpeakerIcon(
+                    modifier = Modifier.size(96.dp), // Increased size for better visibility
+                    contentDescription = "Megaphone"
+                )
             }
             
             // Animation Overlay - MUST be last to appear on top of everything
@@ -445,44 +462,58 @@ private fun ShakingSpeakerIcon(
     modifier: Modifier = Modifier,
     contentDescription: String = "Speaker"
 ) {
+    val density = LocalDensity.current
     val infiniteTransition = rememberInfiniteTransition(label = "speakerShake")
-    val tiltX by infiniteTransition.animateFloat(
-        initialValue = -9f,
-        targetValue = 9f,
+    
+    // Rotation animation for wiggling effect
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = -12f,
+        targetValue = 12f,
         animationSpec = infiniteRepeatable(
             animation = keyframes {
-                durationMillis = 900
-                -9f at 0
-                9f at 225
-                -7f at 450
-                7f at 675
-                -9f at 900
+                durationMillis = 600
+                -12f at 0
+                12f at 150
+                -10f at 300
+                10f at 450
+                -12f at 600
             },
             repeatMode = RepeatMode.Restart
         ),
-        label = "speakerTiltX"
+        label = "speakerRotation"
     )
     
-    Box(
+    // Translation animation for additional shake effect
+    val translationXValue by infiniteTransition.animateFloat(
+        initialValue = -2f,
+        targetValue = 2f,
+        animationSpec = infiniteRepeatable(
+            animation = keyframes {
+                durationMillis = 600
+                -2f at 0
+                2f at 150
+                -1.5f at 300
+                1.5f at 450
+                -2f at 600
+            },
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "speakerTranslationX"
+    )
+    
+    // No background box - just the image with animation
+    Image(
+        painter = painterResource(id = R.drawable.ic_speaker_shake),
+        contentDescription = contentDescription,
         modifier = modifier
-            .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.6f))
-            .padding(6.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Image(
-            painter = painterResource(id = R.drawable.ic_speaker_shake),
-            contentDescription = contentDescription,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    // Rotate around the X axis so the top leans forward while the bottom leans back
-                    rotationX = tiltX
-                    cameraDistance = 12 * density
-                }
-        )
-    }
+            .graphicsLayer {
+                // Rotate around Z axis for visible wiggle effect
+                rotationZ = rotation
+                // Add slight translation for shake effect
+                translationX = with(density) { translationXValue.dp.toPx() }
+            },
+        contentScale = ContentScale.Fit
+    )
 }
 
 @Composable
@@ -563,33 +594,137 @@ private fun AnimationOverlay(
     animations: List<AnimationTrigger>,
     onAnimationComplete: (AnimationTrigger) -> Unit
 ) {
-    if (animations.isEmpty()) return
+    val context = LocalContext.current
     
-    android.util.Log.d("AnimationOverlay", "Displaying ${animations.size} animations")
+    if (animations.isEmpty()) {
+        android.util.Log.d("AnimationOverlay", "📭 No animations to display")
+        return
+    }
     
-    // Display all animations simultaneously - they can overlap
+    // Only display the FIRST animation in the queue (sequential playback)
+    val currentAnimation = animations.first()
+    val queueSize = animations.size
+    
+    android.util.Log.d("AnimationOverlay", "🎬 Queue: $queueSize animations, displaying: ${currentAnimation.animationType} (id: ${currentAnimation.id})")
+    
+    // Show toast when new animations are added to queue
+    var previousQueueSize by remember { mutableStateOf(0) }
+    LaunchedEffect(queueSize) {
+        if (queueSize > previousQueueSize) {
+            try {
+                Toast.makeText(context, "📋 Queue: $queueSize animations", Toast.LENGTH_SHORT).show()
+                previousQueueSize = queueSize
+            } catch (e: Exception) {
+                android.util.Log.e("AnimationOverlay", "Error showing toast", e)
+            }
+        }
+    }
+    
+    // Display only the first animation - sequential playback
     // Use zIndex to ensure animations appear on top of all content
     Box(
         modifier = Modifier
             .fillMaxSize()
             .zIndex(1000f) // High z-index to ensure it's on top
     ) {
-        // Use key to ensure each animation is properly tracked and removed
-        animations.forEachIndexed { index, animation ->
-            // Create unique key for each animation to ensure proper cleanup
-            // Using a combination of type, URL, and index to ensure uniqueness
-            key("${animation.animationType}_${animation.imageUrl}_$index") {
-                android.util.Log.d("AnimationOverlay", "Rendering animation $index: ${animation.animationType}")
-                CharacterAnimation(
-                    animationType = animation.animationType,
-                    imageUrl = animation.imageUrl,
-                    modifier = Modifier.fillMaxSize(),
-                    onAnimationComplete = {
-                        android.util.Log.d("AnimationOverlay", "Animation $index (${animation.animationType}) completed, removing from list")
-                        onAnimationComplete(animation)
-                    }
-                )
-            }
+        // Use the unique ID as the key to ensure Compose properly tracks each animation
+        key(currentAnimation.id) {
+            android.util.Log.d("AnimationOverlay", "🎨 Rendering animation: ${currentAnimation.animationType} (id: ${currentAnimation.id})")
+            CharacterAnimation(
+                animationType = currentAnimation.animationType,
+                imageUrl = currentAnimation.imageUrl,
+                modifier = Modifier.fillMaxSize(),
+                onAnimationComplete = {
+                    android.util.Log.d("AnimationOverlay", "✅ Animation ${currentAnimation.id} (${currentAnimation.animationType}) completed, removing from queue")
+                    android.util.Log.d("AnimationOverlay", "   - Remaining in queue: ${queueSize - 1}")
+                    onAnimationComplete(currentAnimation)
+                    // The next animation will automatically start since the list updates
+                }
+            )
         }
+    }
+}
+
+/**
+ * Composable that displays tip usage disclosure text with auto-scrolling animation.
+ * Text enters from the left and exits from the right, repeating continuously.
+ * 
+ * @param disclosures List of tip usage disclosures
+ * @param modifier Modifier for the component
+ */
+@Composable
+private fun ScrollingTipUsageText(
+    disclosures: List<TipUsageDisclosure>,
+    modifier: Modifier = Modifier
+) {
+    // Format the text: "for [customLabel or usageType]"
+    val text = remember(disclosures) {
+        val parts = disclosures.map { disclosure ->
+            val label = disclosure.customLabel ?: disclosure.usageType
+                .split("_")
+                .joinToString(" ") { word ->
+                    word.lowercase().replaceFirstChar { it.uppercase() }
+                }
+            label
+        }
+        "for ${parts.joinToString(", ")}"
+    }
+    
+    // Create a shorter text by repeating it only twice for seamless scrolling (reduced from 3)
+    val scrollingText = remember(text) {
+        "$text  •  $text  •  " // Repeat with separator for seamless loop (reduced from 3 to 2)
+    }
+    
+    // Get screen width and density for proper scrolling calculation
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+    val screenWidthPx: Float = with(density) { 
+        configuration.screenWidthDp.dp.toPx()
+    }
+    
+    // Infinite transition for continuous scrolling
+    val infiniteTransition = rememberInfiniteTransition(label = "scrollingText")
+    
+    // Calculate text width (approximate: 1 character ≈ 8dp at 14sp)
+    val estimatedTextWidthPx: Float = with(density) { 
+        val charCount = scrollingText.length
+        val textWidthDp = 8.dp * charCount
+        textWidthDp.toPx()
+    }
+    val scrollDistancePx: Float = estimatedTextWidthPx + screenWidthPx
+    
+    // Animate the offset from right (positive) to left (negative) - reduced duration for faster scroll
+    val offsetX by infiniteTransition.animateFloat(
+        initialValue = screenWidthPx,
+        targetValue = -scrollDistancePx,
+        animationSpec = infiniteRepeatable(
+            animation = keyframes {
+                durationMillis = 12000 // Reduced from 20000ms to 12000ms for faster scrolling
+                screenWidthPx at 0
+                -scrollDistancePx at 12000
+            },
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "scrollOffset"
+    )
+    
+    Box(
+        modifier = modifier
+            .height(24.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(4.dp)),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Text(
+            text = scrollingText,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            color = Color.White.copy(alpha = 0.9f),
+            modifier = Modifier
+                .graphicsLayer {
+                    translationX = offsetX
+                }
+                .wrapContentWidth(Alignment.Start)
+        )
     }
 }

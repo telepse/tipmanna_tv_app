@@ -30,6 +30,7 @@ import kotlinx.coroutines.launch
  * @property scaleEnd Final scale factor (for fade out)
  * @property scaleMid Optional peak scale factor at midpoint (for burst/pop effects)
  * @property delayMillis Delay before this particle starts animating
+ * @property particleSizeRatio Optional size ratio (0.0-1.0) for variable particle sizes
  */
 internal data class AnimatedParticle(
     val id: Int,
@@ -41,7 +42,8 @@ internal data class AnimatedParticle(
     val scaleStart: Float = 0f,
     val scaleEnd: Float = 1f,
     val scaleMid: Float? = null, // Optional peak scale at midpoint
-    val delayMillis: Int = 0
+    val delayMillis: Int = 0,
+    val particleSizeRatio: Float? = null // Optional: 0.0-1.0 for variable sizing (e.g., 40-90dp)
 )
 
 /**
@@ -51,14 +53,18 @@ internal data class AnimatedParticle(
  * from start to end position with rotation and scale effects.
  * 
  * @param particle The particle data to animate
- * @param size Size of the particle
+ * @param size Base size of the particle (used if particleSizeRatio is null)
  * @param durationMillis Total animation duration
+ * @param minSize Optional minimum size for variable sizing
+ * @param maxSize Optional maximum size for variable sizing
  */
 @Composable
 internal fun AnimatedParticle(
     particle: AnimatedParticle,
     size: Dp,
-    durationMillis: Int
+    durationMillis: Int,
+    minSize: Dp? = null,
+    maxSize: Dp? = null
 ) {
     val context = LocalContext.current
     
@@ -132,6 +138,15 @@ internal fun AnimatedParticle(
         return // Don't render at all when invisible
     }
     
+    // Calculate variable size if particleSizeRatio is provided
+    val actualSize = if (particle.particleSizeRatio != null && minSize != null && maxSize != null) {
+        val sizeRatio = particle.particleSizeRatio
+        val sizeRange = maxSize - minSize
+        minSize + (sizeRange * sizeRatio)
+    } else {
+        size
+    }
+    
     // Calculate current position
     val currentX = particle.startPosition.x + (particle.endPosition.x - particle.startPosition.x) * position
     val currentY = particle.startPosition.y + (particle.endPosition.y - particle.startPosition.y) * position
@@ -154,12 +169,12 @@ internal fun AnimatedParticle(
                 scaleY = scale
                 alpha = scale.coerceIn(0f, 1f) // Ensure alpha matches scale for complete fade
             }
-            .size(size)
+            .size(actualSize)
     ) {
         Image(
             painter = imagePainter,
             contentDescription = null,
-            modifier = Modifier.size(size),
+            modifier = Modifier.size(actualSize),
             contentScale = ContentScale.Fit
         )
     }

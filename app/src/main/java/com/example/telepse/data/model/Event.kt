@@ -77,7 +77,9 @@ data class Performer(
 data class TipUsageDisclosure(
     val id: String,
     val usageType: String,
-    val percentage: Int
+    val percentage: Int,
+    val customLabel: String? = null,
+    val eventId: String? = null
 )
 
 @Serializable

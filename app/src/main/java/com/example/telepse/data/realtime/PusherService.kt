@@ -4,7 +4,6 @@ import com.example.telepse.data.model.AmountUpdatedEvent
 import com.example.telepse.data.model.ScreenSettingsUpdatedEvent
 import com.example.telepse.data.model.TipAnimationEvent
 import com.example.telepse.data.realtime.PusherConfig
-import com.google.gson.Gson
 import com.pusher.client.Pusher
 import com.pusher.client.PusherOptions
 import com.pusher.client.channel.Channel
@@ -18,6 +17,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.serialization.json.Json
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -35,7 +35,11 @@ class PusherService @Inject constructor() {
     
     private var pusher: Pusher? = null
     private var currentChannel: Channel? = null
-    private val gson = Gson()
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+        encodeDefaults = false
+    }
     
     /**
      * Initializes and connects to Pusher.
@@ -51,15 +55,15 @@ class PusherService @Inject constructor() {
             options.setCluster(PusherConfig.CLUSTER)
             
             pusher = Pusher(PusherConfig.API_KEY, options)
-        pusher?.connect(object : ConnectionEventListener {
+            pusher?.connect(object : ConnectionEventListener {
             override fun onConnectionStateChange(change: ConnectionStateChange) {
                 // Log connection state changes for debugging
-                Log.d("PusherService", "Connection state: ${change.currentState}")
+                Log.d("PusherService", "🔌 Connection state changed: ${change.previousState} -> ${change.currentState}")
             }
             
             override fun onError(message: String, code: String, e: Exception?) {
                 // Log errors for debugging
-                Log.e("PusherService", "Error: $message, Code: $code", e)
+                Log.e("PusherService", "❌ Pusher Error: $message, Code: $code", e)
             }
         }, ConnectionState.ALL)
             true
@@ -84,7 +88,7 @@ class PusherService @Inject constructor() {
                     // we'll handle cleanup when disconnecting
                 }
                 currentChannel = pusherInstance.subscribe(channelName)
-                Log.d("PusherService", "Subscribed to channel: $channelName")
+                Log.d("PusherService", "✅ Subscribed to channel: $channelName")
                 true
             } ?: run {
                 Log.e("PusherService", "Pusher not initialized. Call initialize() first.")
@@ -131,20 +135,49 @@ class PusherService @Inject constructor() {
         val subscription = object : SubscriptionEventListener {
             override fun onEvent(event: PusherEvent) {
                 try {
-                    Log.d("PusherService", "Received tip-animation event: ${event.data}")
-                    val tipAnimation = gson.fromJson(event.data, TipAnimationEvent::class.java)
-                    Log.d("PusherService", "Parsed tip-animation: ${tipAnimation.selectedTips.size} tips")
-                    trySend(tipAnimation)
+                    Log.d("PusherService", "🔔 Received tip-animation event")
+                    Log.d("PusherService", "Raw event data: ${event.data}")
+                    Log.d("PusherService", "Event name: ${event.eventName}")
+                    
+                    // Try to parse the event
+                    val tipAnimation = json.decodeFromString<TipAnimationEvent>(event.data)
+                    Log.d("PusherService", "✅ Successfully parsed tip-animation: ${tipAnimation.selectedTips.size} tips")
+                    Log.d("PusherService", "Tip names: ${tipAnimation.selectedTips}")
+                    Log.d("PusherService", "Amount: ${tipAnimation.amount}, Sender: ${tipAnimation.sender}")
+                    
+                    // Create a formatted JSON string for display
+                    val jsonDisplay = """
+                        {
+                          "selectedTips": [${tipAnimation.selectedTips.joinToString(", ") { "\"$it\"" }}],
+                          "amount": ${tipAnimation.amount},
+                          "sender": "${tipAnimation.sender}"
+                        }
+                    """.trimIndent()
+                    
+                    // Store raw JSON in a way that can be accessed by ViewModel
+                    // We'll pass it through the event or use a different approach
+                    Log.d("PusherService", "📋 JSON Payload:\n$jsonDisplay")
+                    
+                    // Send to flow
+                    val sent = trySend(tipAnimation)
+                    if (sent.isSuccess) {
+                        Log.d("PusherService", "✅ Sent tip-animation to flow")
+                    } else {
+                        Log.e("PusherService", "❌ Failed to send tip-animation to flow: ${sent.exceptionOrNull()}")
+                    }
                 } catch (e: Exception) {
                     // Log error but don't crash
-                    Log.e("PusherService", "Error parsing tip-animation event", e)
+                    Log.e("PusherService", "❌ Error parsing tip-animation event", e)
+                    Log.e("PusherService", "Error message: ${e.message}")
+                    Log.e("PusherService", "Error type: ${e.javaClass.simpleName}")
+                    Log.e("PusherService", "Raw data that failed: ${event.data}")
                     e.printStackTrace()
                 }
             }
         }
         
         finalChannel.bind("tip-animation", subscription)
-        Log.d("PusherService", "Bound to tip-animation event")
+        Log.d("PusherService", "✅ Bound to tip-animation event - ready to receive events")
         
         awaitClose {
             finalChannel.unbind("tip-animation", subscription)
@@ -177,18 +210,19 @@ class PusherService @Inject constructor() {
         val subscription = object : SubscriptionEventListener {
             override fun onEvent(event: PusherEvent) {
                 try {
-                    Log.d("PusherService", "Received event-amount-updated: ${event.data}")
-                    val amountUpdated = gson.fromJson(event.data, AmountUpdatedEvent::class.java)
+                    Log.d("PusherService", "🔔 Received event-amount-updated: ${event.data}")
+                    val amountUpdated = json.decodeFromString<AmountUpdatedEvent>(event.data)
+                    Log.d("PusherService", "✅ Parsed amount-updated: £${amountUpdated.amountRaised}, ${amountUpdated.numOfTips} tips")
                     trySend(amountUpdated)
                 } catch (e: Exception) {
-                    Log.e("PusherService", "Error parsing amount-updated event", e)
+                    Log.e("PusherService", "❌ Error parsing amount-updated event", e)
                     e.printStackTrace()
                 }
             }
         }
         
         finalChannel.bind("event-amount-updated", subscription)
-        Log.d("PusherService", "Bound to event-amount-updated event")
+        Log.d("PusherService", "✅ Bound to event-amount-updated event - ready to receive events")
         
         awaitClose {
             finalChannel.unbind("event-amount-updated", subscription)
@@ -221,18 +255,19 @@ class PusherService @Inject constructor() {
         val subscription = object : SubscriptionEventListener {
             override fun onEvent(event: PusherEvent) {
                 try {
-                    Log.d("PusherService", "Received screen-settings-updated: ${event.data}")
-                    val settingsUpdated = gson.fromJson(event.data, ScreenSettingsUpdatedEvent::class.java)
+                    Log.d("PusherService", "🔔 Received screen-settings-updated: ${event.data}")
+                    val settingsUpdated = json.decodeFromString<ScreenSettingsUpdatedEvent>(event.data)
+                    Log.d("PusherService", "✅ Parsed settings-updated successfully")
                     trySend(settingsUpdated)
                 } catch (e: Exception) {
-                    Log.e("PusherService", "Error parsing settings-updated event", e)
+                    Log.e("PusherService", "❌ Error parsing settings-updated event", e)
                     e.printStackTrace()
                 }
             }
         }
         
         finalChannel.bind("screen-settings-updated", subscription)
-        Log.d("PusherService", "Bound to screen-settings-updated event")
+        Log.d("PusherService", "✅ Bound to screen-settings-updated event - ready to receive events")
         
         awaitClose {
             finalChannel.unbind("screen-settings-updated", subscription)
