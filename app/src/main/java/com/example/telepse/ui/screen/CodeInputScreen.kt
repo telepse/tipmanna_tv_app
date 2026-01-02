@@ -43,6 +43,8 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
+import java.time.LocalDate
+import java.time.LocalTime
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -120,30 +122,28 @@ fun CodeInputScreen(
                     .fillMaxWidth(0.75f), // Reduced width to 75%
                 horizontalAlignment = Alignment.Start
             ) {
-                // Title: "Join Event" - Only show when no event details
+                // Title: "Join Event" - Only show when no event details (Racing Sans One)
                 if (!hasEvents) {
                     Text(
                         text = "Join Event",
-                        fontSize = 36.sp,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.displaySmall, // Racing Sans One
                         color = TextBlack,
                         modifier = Modifier.padding(top = 80.dp, bottom = 8.dp)
                     )
                 }
                 
-                // Subtitle: "Search for your event"
+                // Subtitle: "Search for your event" (Open Sans)
                 Text(
                     text = "Search for your event",
-                    fontSize = 16.sp,
+                    style = MaterialTheme.typography.bodyLarge, // Open Sans
                     color = TextGray,
                     modifier = Modifier.padding(bottom = 48.dp)
                 )
                 
-                // Section Header: "Search"
+                // Section Header: "Search" (Racing Sans One)
                 Text(
                     text = "Search",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Medium,
+                    style = MaterialTheme.typography.titleLarge, // Racing Sans One
                     color = TextBlack,
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
@@ -166,8 +166,8 @@ fun CodeInputScreen(
                         placeholder = {
                             Text(
                                 text = "Enter Event Code",
-                                color = TextGray.copy(alpha = 0.6f),
-                                fontSize = 16.sp
+                                style = MaterialTheme.typography.bodyLarge, // Open Sans
+                                color = TextGray.copy(alpha = 0.6f)
                             )
                         },
                         modifier = Modifier
@@ -293,9 +293,8 @@ fun CodeInputScreen(
                         )
                     } else {
                         Text(
-                            text = if (hasEvents) "Load Overlay" else "Search",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Medium
+                            text = if (hasEvents) "Load full display" else "Search",
+                            style = MaterialTheme.typography.labelLarge.copy(fontSize = 18.sp) // Montserrat
                         )
                     }
                 }
@@ -304,11 +303,11 @@ fun CodeInputScreen(
                 uiState.error?.let { error ->
                     Text(
                         text = error,
+                        style = MaterialTheme.typography.bodyMedium, // Open Sans
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier
                             .padding(top = 16.dp)
-                            .align(Alignment.CenterHorizontally),
-                        fontSize = 14.sp
+                            .align(Alignment.CenterHorizontally)
                     )
                 }
             }
@@ -338,14 +337,8 @@ fun EventDetailsCard(
     
     val formattedTime = event.startTime
     
-    // Determine status (simplified - you can enhance this based on eventDate vs current time)
-    val status = if (event.approved == true && event.rejected != true) {
-        "Ongoing"
-    } else if (event.rejected == true) {
-        "Rejected"
-    } else {
-        "Pending"
-    }
+    // Determine status based on event date and time
+    val (status, statusBgColor, statusTextColor) = getEventStatus(event)
     
     Box(
         modifier = modifier.fillMaxWidth()
@@ -385,11 +378,10 @@ fun EventDetailsCard(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-            // Event Name - Allow wrapping
+            // Event Name - Allow wrapping (Racing Sans One)
             Text(
                 text = event.eventName,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.headlineSmall, // Racing Sans One
                 color = TextBlack,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -405,24 +397,23 @@ fun EventDetailsCard(
             ) {
                 Text(
                     text = "Hosted by ${event.hostName}",
-                    fontSize = 16.sp,
+                    style = MaterialTheme.typography.bodyLarge, // Open Sans
                     color = TextGray
                 )
                 
-                // Status Tag
+                // Status Tag (Montserrat for buttons/offers)
                 Box(
                     modifier = Modifier
                         .background(
-                            color = OngoingBlue,
+                            color = statusBgColor,
                             shape = RoundedCornerShape(8.dp)
                         )
                         .padding(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Text(
                         text = status,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = BackgroundWhite
+                        style = MaterialTheme.typography.labelMedium, // Montserrat
+                        color = statusTextColor
                     )
                 }
             }
@@ -442,7 +433,7 @@ fun EventDetailsCard(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "$formattedDate • $formattedTime",
-                    fontSize = 16.sp,
+                    style = MaterialTheme.typography.bodyLarge, // Open Sans
                     color = TextGray
                 )
             }
@@ -462,13 +453,13 @@ fun EventDetailsCard(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = event.venueLocation,
-                    fontSize = 16.sp,
+                    style = MaterialTheme.typography.bodyLarge, // Open Sans
                     color = TextGray
                 )
             }
             
-            // Tipped Count (using amountToRaise or a placeholder)
-            val tippedAmount = event.amountToRaise?.toInt() ?: 0
+            // Tip Count (using numOfTips)
+            val tipCount = event.numOfTips ?: 0
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -476,14 +467,14 @@ fun EventDetailsCard(
             ) {
                 Icon(
                     imageVector = Icons.Default.People,
-                    contentDescription = "Tipped",
+                    contentDescription = "Tip",
                     tint = TextGray,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "$tippedAmount Tipped",
-                    fontSize = 16.sp,
+                    text = "$tipCount tip${if (tipCount != 1) "s" else ""}",
+                    style = MaterialTheme.typography.bodyLarge, // Open Sans
                     color = TextGray
                 )
             }
@@ -539,5 +530,54 @@ fun EventDetailsCard(
                 }
             }
         }
+    }
+}
+
+/**
+ * Determines the event status based on event date and end time.
+ * Returns a triple of (status text, background color, text color).
+ */
+@Composable
+fun getEventStatus(event: Event): Triple<String, Color, Color> {
+    val now = LocalDateTime.now()
+    
+    return try {
+        // Parse event date
+        val eventInstant = Instant.parse(event.eventDate)
+        val eventDateTime = LocalDateTime.ofInstant(eventInstant, ZoneId.systemDefault())
+        val eventDate = eventDateTime.toLocalDate()
+        val currentDate = now.toLocalDate()
+        
+        // Parse end time if available
+        val endTime = event.endTime?.let {
+            try {
+                LocalTime.parse(it)
+            } catch (e: Exception) {
+                null
+            }
+        }
+        
+        when {
+            // Event date is in the past
+            eventDate.isBefore(currentDate) -> {
+                Triple("Completed", Color.Black, Color.White)
+            }
+            // Event date is today
+            eventDate.isEqual(currentDate) -> {
+                // Check if end time has passed
+                if (endTime != null && now.toLocalTime().isAfter(endTime)) {
+                    Triple("Completed", Color.Black, Color.White)
+                } else {
+                    Triple("Ongoing", OngoingBlue, Color.White)
+                }
+            }
+            // Event date is in the future
+            else -> {
+                Triple("Not started", Color(0xFFF5F6F7), Color.Black)
+            }
+        }
+    } catch (e: Exception) {
+        // Fallback to default status if parsing fails
+        Triple("Pending", OngoingBlue, Color.White)
     }
 }

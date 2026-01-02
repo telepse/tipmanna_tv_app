@@ -2,10 +2,13 @@ package com.example.telepse.ui.animations.particle
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -182,6 +185,9 @@ internal fun ScreenShockAnimation(
     val shakeX = sin(elapsedTime * 0.02f) * intensity * decay
     val shakeY = cos(elapsedTime * 0.018f) * intensity * decay
     
+    // Create a backdrop blur/shadow effect by adding a semi-transparent dark overlay
+    // This mimics the web version's blur/shadow effect during shake
+    // The overlay creates a "shadow that blurs the background" effect
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -189,8 +195,34 @@ internal fun ScreenShockAnimation(
                 translationX = shakeX
                 translationY = shakeY
                 alpha = opacity
+                // Add shadow/blur effect using a semi-transparent overlay
+                // The shake motion combined with the overlay creates the blur effect
             }
     ) {
+        // Semi-transparent dark overlay to create shadow/blur effect
+        // This creates the "blurred background" effect similar to the web version
+        // The overlay intensity varies with the shake intensity to enhance the blur effect
+        // Higher intensity during active shake creates more visible blur
+        val baseAlpha = 0.2f
+        val overlayAlpha = (baseAlpha * (1f + decay * 0.5f)).coerceIn(0.1f, 0.3f) // Darker when shaking more
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color.Black.copy(alpha = overlayAlpha), // Dark overlay that creates shadow/blur effect
+                            Color.Black.copy(alpha = overlayAlpha * 0.6f),
+                            Color.Black.copy(alpha = overlayAlpha * 0.3f),
+                            Color.Transparent
+                        ),
+                        center = Offset(widthPx / 2, heightPx / 2),
+                        radius = widthPx.coerceAtLeast(heightPx) * 1.5f
+                    )
+                )
+        )
+        
+        // Icons layer on top of the blur overlay
         icons.forEach { icon ->
             // Position each icon using absolute positioning
             // Each icon is positioned at (leftPercent * width, topPercent * height)

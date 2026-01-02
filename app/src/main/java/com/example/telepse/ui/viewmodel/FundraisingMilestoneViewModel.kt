@@ -85,10 +85,19 @@ class FundraisingMilestoneViewModel @Inject constructor(
                 disconnectFromCurrentEvent()
             }
             
-            _uiState.value = _uiState.value.copy(
+            // Also disconnect if same event but Pusher needs reinitialization
+            if (currentEventId == eventId && !isPusherInitialized) {
+                Log.d("FundraisingMilestoneViewModel", "🔄 Reinitializing Pusher for event: $eventId")
+                disconnectFromCurrentEvent()
+            }
+            
+            // Reset state immediately when loading a new event to prevent showing old data
+            _uiState.value = FundraisingMilestoneUiState(
+                event = null, // Clear old event immediately
                 isLoading = true,
                 error = null,
-                pendingAnimations = emptyList() // Clear animations when loading new event
+                pendingAnimations = emptyList(), // Clear animations when loading new event
+                toastMessage = null
             )
             
             try {
@@ -126,7 +135,7 @@ class FundraisingMilestoneViewModel @Inject constructor(
      * Disconnects from the current event's Pusher channel.
      * Called when switching to a different event.
      */
-    private fun disconnectFromCurrentEvent() {
+    private suspend fun disconnectFromCurrentEvent() {
         Log.d("FundraisingMilestoneViewModel", "🔌 Disconnecting from current event")
         
         // Cancel all flow collection jobs
@@ -139,6 +148,9 @@ class FundraisingMilestoneViewModel @Inject constructor(
         pusherService.disconnect()
         isPusherInitialized = false
         currentEventId = null
+        
+        // Small delay to ensure cleanup completes
+        kotlinx.coroutines.delay(200)
         
         Log.d("FundraisingMilestoneViewModel", "✅ Disconnected and cleaned up")
     }
@@ -153,10 +165,10 @@ class FundraisingMilestoneViewModel @Inject constructor(
             return
         }
         
-        // If already initialized for a different event, disconnect first
+        // Disconnection should already be handled in loadEvent before calling this
+        // But if somehow we get here with a different event, log a warning
         if (isPusherInitialized && currentEventId != eventId) {
-            Log.d("FundraisingMilestoneViewModel", "Reinitializing Pusher for new event: $eventId")
-            disconnectFromCurrentEvent()
+            Log.w("FundraisingMilestoneViewModel", "⚠️ Warning: Initializing Pusher for different event without disconnecting first")
         }
         
         isPusherInitialized = true
@@ -164,8 +176,9 @@ class FundraisingMilestoneViewModel @Inject constructor(
         
         viewModelScope.launch {
             try {
-                // Initialize Pusher first
-                if (!pusherService.initialize()) {
+                // Initialize Pusher first - force reconnect if switching events
+                val forceReconnect = isPusherInitialized && currentEventId != eventId
+                if (!pusherService.initialize(forceReconnect = forceReconnect)) {
                     Log.e("FundraisingMilestoneViewModel", "Failed to initialize Pusher")
                     return@launch
                 }
@@ -391,6 +404,7 @@ class FundraisingMilestoneViewModel @Inject constructor(
                     numOfTips = settingsUpdated.numOfTips ?: currentEvent.numOfTips,
                     hideProgressBarAmount = settingsUpdated.hideProgressBarAmount ?: currentEvent.hideProgressBarAmount,
                     showLatestAmount = settingsUpdated.showLatestAmount ?: currentEvent.showLatestAmount,
+                    latestTipAmount = settingsUpdated.latestTipAmount ?: currentEvent.latestTipAmount,
                     tipUsageDisclosure = settingsUpdated.tipUsageDisclosure ?: currentEvent.tipUsageDisclosure,
                     backgroundType = settingsUpdated.backgroundType ?: currentEvent.backgroundType
                 )
@@ -412,6 +426,15 @@ class FundraisingMilestoneViewModel @Inject constructor(
     
     override fun onCleared() {
         super.onCleared()
-        disconnectFromCurrentEvent()
+        // Cancel all flow collection jobs
+        flowJobs.forEach { job ->
+            job.cancel()
+        }
+        flowJobs.clear()
+        
+        // Disconnect from Pusher (non-suspend cleanup)
+        pusherService.disconnect()
+        isPusherInitialized = false
+        currentEventId = null
     }
 }

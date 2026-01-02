@@ -48,7 +48,8 @@ data class Event(
     val scanLink: String? = null,
     val characterSets: List<CharacterSet>? = null,
     val showLatestAmount: Boolean? = null,
-    val hideProgressBarAmount: Boolean? = null
+    val hideProgressBarAmount: Boolean? = null,
+    val latestTipAmount: Double? = null
 )
 
 @Serializable

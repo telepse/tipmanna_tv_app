@@ -45,10 +45,28 @@ class PusherService @Inject constructor() {
      * Initializes and connects to Pusher.
      * Should be called before subscribing to channels.
      * 
+     * @param forceReconnect If true, disconnects existing connection before reinitializing
      * @return true if initialization was successful, false otherwise
      */
-    fun initialize(): Boolean {
-        if (pusher != null) return true
+    fun initialize(forceReconnect: Boolean = false): Boolean {
+        // If already initialized and not forcing reconnect, return true
+        if (pusher != null && !forceReconnect) {
+            // Check if pusher is still connected
+            val state = pusher?.connection?.state
+            if (state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING) {
+                Log.d("PusherService", "Pusher already initialized and connected")
+                return true
+            } else {
+                Log.d("PusherService", "Pusher exists but not connected (state: $state), reinitializing...")
+                disconnect()
+            }
+        }
+        
+        // If forcing reconnect, disconnect first
+        if (forceReconnect && pusher != null) {
+            Log.d("PusherService", "Force reconnecting Pusher...")
+            disconnect()
+        }
         
         return try {
             val options = PusherOptions()
@@ -56,16 +74,17 @@ class PusherService @Inject constructor() {
             
             pusher = Pusher(PusherConfig.API_KEY, options)
             pusher?.connect(object : ConnectionEventListener {
-            override fun onConnectionStateChange(change: ConnectionStateChange) {
-                // Log connection state changes for debugging
-                Log.d("PusherService", "🔌 Connection state changed: ${change.previousState} -> ${change.currentState}")
-            }
-            
-            override fun onError(message: String, code: String, e: Exception?) {
-                // Log errors for debugging
-                Log.e("PusherService", "❌ Pusher Error: $message, Code: $code", e)
-            }
-        }, ConnectionState.ALL)
+                override fun onConnectionStateChange(change: ConnectionStateChange) {
+                    // Log connection state changes for debugging
+                    Log.d("PusherService", "🔌 Connection state changed: ${change.previousState} -> ${change.currentState}")
+                }
+                
+                override fun onError(message: String, code: String, e: Exception?) {
+                    // Log errors for debugging
+                    Log.e("PusherService", "❌ Pusher Error: $message, Code: $code", e)
+                }
+            }, ConnectionState.ALL)
+            Log.d("PusherService", "✅ Pusher initialized")
             true
         } catch (e: Exception) {
             Log.e("PusherService", "Failed to initialize Pusher", e)
@@ -82,10 +101,17 @@ class PusherService @Inject constructor() {
     fun subscribeToChannel(channelName: String): Boolean {
         return try {
             pusher?.let { pusherInstance ->
-                // Unsubscribe from previous channel if exists
+                // Unsubscribe from previous channel if exists and it's a different channel
                 currentChannel?.let { channel ->
-                    // Note: Pusher Java client doesn't have unbind_all, 
-                    // we'll handle cleanup when disconnecting
+                    if (channel.name != channelName) {
+                        Log.d("PusherService", "🔄 Unsubscribing from previous channel: ${channel.name}")
+                        try {
+                            pusherInstance.unsubscribe(channel.name)
+                        } catch (e: Exception) {
+                            Log.w("PusherService", "Error unsubscribing from channel ${channel.name}", e)
+                        }
+                        currentChannel = null
+                    }
                 }
                 currentChannel = pusherInstance.subscribe(channelName)
                 Log.d("PusherService", "✅ Subscribed to channel: $channelName")

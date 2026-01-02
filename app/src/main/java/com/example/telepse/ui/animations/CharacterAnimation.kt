@@ -69,6 +69,34 @@ fun CharacterAnimation(
         return
     }
     
+    // Spiral Float uses a different rendering approach (matching web version)
+    if (animationType == AnimationType.FLOAT) {
+        // Web version uses 20000ms duration, minimum 20000ms
+        val floatDuration = maxOf(config.durationMillis, 20000)
+        
+        // Trigger completion callback after animation duration
+        LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(floatDuration.toLong() + 300L) // Duration + 300ms buffer
+            onAnimationComplete?.invoke()
+        }
+        
+        Box(modifier = modifier.fillMaxSize()) {
+            SpiralFloatAnimation(
+                icons = listOf(imageUrl), // Web version accepts array of icons
+                screenWidth = screenWidth,
+                screenHeight = screenHeight,
+                durationMillis = floatDuration,
+                laneTop = 35f, // Default: 35%
+                laneHeight = 25f, // Default: 25%
+                spiralRadius = 40f, // Default: 40
+                rotations = 2.5f, // Default: 2.5
+                scale = 1.0f, // Default: 1
+                spacing = 16f // Default: 16vw
+            )
+        }
+        return
+    }
+    
     // Generate particles based on animation type
     val particles = when (animationType) {
         AnimationType.CONFETTI -> generateConfettiParticles(
@@ -95,12 +123,10 @@ fun CharacterAnimation(
             screenWidth = screenWidth,
             screenHeight = screenHeight
         )
-        AnimationType.FLOAT -> generateFloatParticles(
-            imageUrl = imageUrl,
-            config = config,
-            screenWidth = screenWidth,
-            screenHeight = screenHeight
-        )
+        AnimationType.FLOAT -> {
+            // Spiral Float uses a different rendering approach (like Screen Shock)
+            emptyList() // Will be handled separately below
+        }
         AnimationType.SCREEN_SHOCK -> emptyList() // Handled above
     }
     

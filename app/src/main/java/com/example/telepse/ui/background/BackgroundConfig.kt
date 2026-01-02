@@ -36,7 +36,7 @@ val BACKGROUND_CONFIG = listOf(
         backgroundAsset = R.raw.gaming_background
     ),
     BackgroundEntry(
-        id = "islamicd",
+        id = "islamic",
         backgroundAsset = R.raw.religious_background
     )
     // Add more backgrounds here as needed

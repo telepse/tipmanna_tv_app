@@ -41,6 +41,7 @@ data class ScreenSettingsUpdatedEvent(
     val numOfTips: Int? = null,
     val hideProgressBarAmount: Boolean? = null,
     val showLatestAmount: Boolean? = null,
+    val latestTipAmount: Double? = null,
     val tipUsageDisclosure: List<TipUsageDisclosure>? = null,
     val backgroundType: String? = null
 )
