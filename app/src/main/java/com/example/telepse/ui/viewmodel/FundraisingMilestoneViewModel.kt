@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.telepse.data.model.Character
 import com.example.telepse.data.model.Event
+import com.example.telepse.data.network.NetworkMonitor
 import com.example.telepse.data.realtime.PusherService
 import com.example.telepse.data.repository.EventRepository
 import com.example.telepse.ui.animations.AnimationType
@@ -41,7 +42,8 @@ data class FundraisingMilestoneUiState(
 @HiltViewModel
 class FundraisingMilestoneViewModel @Inject constructor(
     private val eventRepository: EventRepository,
-    private val pusherService: PusherService
+    private val pusherService: PusherService,
+    private val networkMonitor: NetworkMonitor
 ) : ViewModel() {
     
     private val _uiState = MutableStateFlow(FundraisingMilestoneUiState())
@@ -79,6 +81,19 @@ class FundraisingMilestoneViewModel @Inject constructor(
      */
     fun loadEvent(eventId: String) {
         viewModelScope.launch {
+            // Check network status before attempting to load
+            if (!networkMonitor.isCurrentlyOnline()) {
+                Log.w("FundraisingMilestoneViewModel", "⚠️ No network connection, cannot load event")
+                _uiState.value = FundraisingMilestoneUiState(
+                    event = null,
+                    isLoading = false,
+                    error = "No internet connection. Please check your network and try again.",
+                    pendingAnimations = emptyList(),
+                    toastMessage = "No internet connection"
+                )
+                return@launch
+            }
+            
             // If switching to a different event, disconnect from the old one first
             if (currentEventId != null && currentEventId != eventId) {
                 Log.d("FundraisingMilestoneViewModel", "🔄 Switching events: $currentEventId -> $eventId")
@@ -112,20 +127,36 @@ class FundraisingMilestoneViewModel @Inject constructor(
                             error = null
                         )
                         
-                        // Initialize Pusher and subscribe after fetching event
-                        initializePusher(eventId, event)
+                        // Initialize Pusher and subscribe after fetching event (only if online)
+                        if (networkMonitor.isCurrentlyOnline()) {
+                            initializePusher(eventId, event)
+                        } else {
+                            Log.w("FundraisingMilestoneViewModel", "⚠️ Network lost during load, skipping Pusher initialization")
+                            showToast("⚠️ Network connection lost")
+                        }
                     },
                     onFailure = { exception ->
+                        // Check if error is due to network
+                        val errorMessage = if (!networkMonitor.isCurrentlyOnline()) {
+                            "No internet connection. Please check your network and try again."
+                        } else {
+                            exception.message ?: "Failed to load event"
+                        }
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
-                            error = exception.message ?: "Failed to load event"
+                            error = errorMessage
                         )
                     }
                 )
             } catch (e: Exception) {
+                val errorMessage = if (!networkMonitor.isCurrentlyOnline()) {
+                    "No internet connection. Please check your network and try again."
+                } else {
+                    "Error loading event: ${e.message}"
+                }
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    error = "Error loading event: ${e.message}"
+                    error = errorMessage
                 )
             }
         }
@@ -198,9 +229,6 @@ class FundraisingMilestoneViewModel @Inject constructor(
                 
                 Log.d("FundraisingMilestoneViewModel", "✅ Pusher initialized and subscribed to: $channelName")
                 Log.d("FundraisingMilestoneViewModel", "   - Waiting for tip-animation events...")
-                // Delay toast to ensure UI is ready
-                kotlinx.coroutines.delay(500)
-                showToast("✅ Pusher connected")
                 
                 // Log that we're about to start observing
                 Log.d("FundraisingMilestoneViewModel", "   - About to start observing tip-animation flow...")
@@ -218,7 +246,6 @@ class FundraisingMilestoneViewModel @Inject constructor(
                 pusherService.observeTipAnimation()
                     .catch { e -> 
                         Log.e("FundraisingMilestoneViewModel", "❌ Error in tip-animation flow", e)
-                        showToast("❌ Tip flow error: ${e.message}")
                         e.printStackTrace()
                     }
                     .collect { tipAnimationEvent ->
@@ -227,29 +254,6 @@ class FundraisingMilestoneViewModel @Inject constructor(
                         Log.d("FundraisingMilestoneViewModel", "   - Amount: ${tipAnimationEvent.amount}")
                         Log.d("FundraisingMilestoneViewModel", "   - Sender: ${tipAnimationEvent.sender}")
                         
-                        // Create JSON display for toast - show full JSON structure
-                        try {
-                            // Escape special characters in tip names and sender
-                            val tipsArray = tipAnimationEvent.selectedTips.joinToString(",") { 
-                                val escaped = it.replace("\"", "\\\"").replace("\n", "\\n")
-                                "\"$escaped\""
-                            }
-                            val escapedSender = tipAnimationEvent.sender.replace("\"", "\\\"").replace("\n", "\\n")
-                            val jsonDisplay = """{"selectedTips":[$tipsArray],"amount":${tipAnimationEvent.amount},"sender":"$escapedSender"}"""
-                            
-                            // Show JSON in toast (limit length to prevent crashes - Toast has character limits)
-                            val displayText = if (jsonDisplay.length > 200) {
-                                jsonDisplay.take(197) + "..."
-                            } else {
-                                jsonDisplay
-                            }
-                            showToast("📋 $displayText")
-                        } catch (e: Exception) {
-                            Log.e("FundraisingMilestoneViewModel", "Error creating JSON display", e)
-                            // Fallback to simple message
-                            showToast("📋 ${tipAnimationEvent.selectedTips.size} tips: ${tipAnimationEvent.selectedTips.joinToString(",")}")
-                        }
-                        
                         // Use current event from state (may have been updated)
                         val currentEvent = _uiState.value.event
                         if (currentEvent != null) {
@@ -257,12 +261,10 @@ class FundraisingMilestoneViewModel @Inject constructor(
                             handleTipAnimationEvent(tipAnimationEvent, currentEvent)
                         } else {
                             Log.w("FundraisingMilestoneViewModel", "⚠️ Event is null, cannot handle tip animation")
-                            showToast("⚠️ Event is null")
                         }
                     }
             } catch (e: Exception) {
                 Log.e("FundraisingMilestoneViewModel", "❌ Error collecting tip-animation", e)
-                showToast("❌ Collect error: ${e.message}")
                 e.printStackTrace()
             }
         }
@@ -277,7 +279,6 @@ class FundraisingMilestoneViewModel @Inject constructor(
                     }
                     .collect { amountUpdated ->
                         Log.d("FundraisingMilestoneViewModel", "Received amount-updated: ${amountUpdated.amountRaised}, ${amountUpdated.numOfTips}")
-                        showToast("💰 Amount: £${amountUpdated.amountRaised}, Tips: ${amountUpdated.numOfTips}")
                         updateAmountRaised(amountUpdated.amountRaised, amountUpdated.numOfTips)
                     }
             } catch (e: Exception) {
@@ -302,6 +303,23 @@ class FundraisingMilestoneViewModel @Inject constructor(
             }
         }
         flowJobs.add(settingsUpdatedJob)
+        
+        // Observe latest tip updates in separate coroutine
+        val latestTipUpdatedJob = viewModelScope.launch {
+            try {
+                pusherService.observeLatestTipUpdated()
+                    .catch { e -> 
+                        Log.e("FundraisingMilestoneViewModel", "Error in latest-tip-updated flow", e)
+                    }
+                    .collect { latestTipUpdated ->
+                        Log.d("FundraisingMilestoneViewModel", "Received latest-tip-updated: £${latestTipUpdated.latestTipAmount}")
+                        updateLatestTipAmount(latestTipUpdated.latestTipAmount)
+                    }
+            } catch (e: Exception) {
+                Log.e("FundraisingMilestoneViewModel", "Error collecting latest-tip-updated", e)
+            }
+        }
+        flowJobs.add(latestTipUpdatedJob)
     }
     
     /**
@@ -333,7 +351,6 @@ class FundraisingMilestoneViewModel @Inject constructor(
             if (character == null) {
                 Log.w("FundraisingMilestoneViewModel", "   ⚠️ Character NOT FOUND for name: '$tipName'")
                 Log.w("FundraisingMilestoneViewModel", "      - Available names: ${allCharacterNames.take(5)}${if (allCharacterNames.size > 5) "..." else ""}")
-                showToast("⚠️ Char not found: $tipName")
                 null
             } else {
                 Log.d("FundraisingMilestoneViewModel", "   ✅ Found character: ${character.name}")
@@ -357,13 +374,11 @@ class FundraisingMilestoneViewModel @Inject constructor(
             Log.d("FundraisingMilestoneViewModel", "   ✅ Adding ${animations.size} animations to queue")
             Log.d("FundraisingMilestoneViewModel", "      - Current queue size: $currentCount")
             Log.d("FundraisingMilestoneViewModel", "      - New queue size: ${currentCount + animations.size}")
-            showToast("✅ Added ${animations.size} animations (queue: ${currentCount + animations.size})")
             _uiState.value = _uiState.value.copy(
                 pendingAnimations = _uiState.value.pendingAnimations + animations
             )
         } else {
             Log.w("FundraisingMilestoneViewModel", "   ❌ No animations created - all characters were null or not found")
-            showToast("❌ No animations created")
         }
     }
     
@@ -409,6 +424,22 @@ class FundraisingMilestoneViewModel @Inject constructor(
                     backgroundType = settingsUpdated.backgroundType ?: currentEvent.backgroundType
                 )
             )
+        }
+    }
+    
+    /**
+     * Updates the latest tip amount from Pusher event.
+     * This is called when a tip is made and the latest-tip-updated event is received.
+     */
+    private fun updateLatestTipAmount(latestTipAmount: Double) {
+        val currentEvent = _uiState.value.event
+        if (currentEvent != null) {
+            _uiState.value = _uiState.value.copy(
+                event = currentEvent.copy(
+                    latestTipAmount = latestTipAmount
+                )
+            )
+            Log.d("FundraisingMilestoneViewModel", "✅ Updated latest tip amount to: £$latestTipAmount")
         }
     }
     

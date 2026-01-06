@@ -1,6 +1,7 @@
 package com.example.telepse.data.realtime
 
 import com.example.telepse.data.model.AmountUpdatedEvent
+import com.example.telepse.data.model.LatestTipUpdatedEvent
 import com.example.telepse.data.model.ScreenSettingsUpdatedEvent
 import com.example.telepse.data.model.TipAnimationEvent
 import com.example.telepse.data.realtime.PusherConfig
@@ -297,6 +298,54 @@ class PusherService @Inject constructor() {
         
         awaitClose {
             finalChannel.unbind("screen-settings-updated", subscription)
+        }
+    }
+    
+    /**
+     * Creates a Flow stream for latest-tip-updated events.
+     * 
+     * This event is triggered when a tip is made and updates the latest tip amount
+     * displayed on the screen.
+     * 
+     * @return Flow of LatestTipUpdatedEvent
+     */
+    fun observeLatestTipUpdated(): Flow<LatestTipUpdatedEvent> = callbackFlow {
+        // Wait for channel to be available (with timeout)
+        var channel: Channel? = null
+        var attempts = 0
+        while (channel == null && attempts < 20) {
+            channel = currentChannel
+            if (channel == null) {
+                kotlinx.coroutines.delay(100)
+                attempts++
+            }
+        }
+        
+        val finalChannel = channel ?: run {
+            Log.e("PusherService", "Channel not available after waiting")
+            close()
+            return@callbackFlow
+        }
+        
+        val subscription = object : SubscriptionEventListener {
+            override fun onEvent(event: PusherEvent) {
+                try {
+                    Log.d("PusherService", "🔔 Received latest-tip-updated: ${event.data}")
+                    val latestTipUpdated = json.decodeFromString<LatestTipUpdatedEvent>(event.data)
+                    Log.d("PusherService", "✅ Parsed latest-tip-updated: £${latestTipUpdated.latestTipAmount}")
+                    trySend(latestTipUpdated)
+                } catch (e: Exception) {
+                    Log.e("PusherService", "❌ Error parsing latest-tip-updated event", e)
+                    e.printStackTrace()
+                }
+            }
+        }
+        
+        finalChannel.bind("latest-tip-updated", subscription)
+        Log.d("PusherService", "✅ Bound to latest-tip-updated event - ready to receive events")
+        
+        awaitClose {
+            finalChannel.unbind("latest-tip-updated", subscription)
         }
     }
 }

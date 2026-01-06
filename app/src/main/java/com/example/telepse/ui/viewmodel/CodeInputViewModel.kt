@@ -3,12 +3,14 @@ package com.example.telepse.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.telepse.data.model.Event
+import com.example.telepse.data.network.NetworkMonitor
 import com.example.telepse.data.repository.EventRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import android.util.Log
 import javax.inject.Inject
 
 data class CodeInputUiState(
@@ -22,7 +24,8 @@ data class CodeInputUiState(
 
 @HiltViewModel
 class CodeInputViewModel @Inject constructor(
-    private val eventRepository: EventRepository
+    private val eventRepository: EventRepository,
+    private val networkMonitor: NetworkMonitor
 ) : ViewModel() {
     
     private val _uiState = MutableStateFlow(CodeInputUiState())
@@ -41,6 +44,16 @@ class CodeInputViewModel @Inject constructor(
         if (code.isBlank()) {
             _uiState.value = _uiState.value.copy(
                 error = "Please enter a code"
+            )
+            return
+        }
+        
+        // Check network status before attempting search
+        if (!networkMonitor.isCurrentlyOnline()) {
+            Log.w("CodeInputViewModel", "⚠️ No network connection, cannot search events")
+            _uiState.value = _uiState.value.copy(
+                isLoading = false,
+                error = "No internet connection. Please check your network and try again."
             )
             return
         }
@@ -68,16 +81,27 @@ class CodeInputViewModel @Inject constructor(
                         }
                     },
                     onFailure = { exception ->
+                        // Check if error is due to network
+                        val errorMessage = if (!networkMonitor.isCurrentlyOnline()) {
+                            "No internet connection. Please check your network and try again."
+                        } else {
+                            exception.message ?: "Error fetching events. Please try again."
+                        }
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
-                            error = exception.message ?: "Error fetching events. Please try again."
+                            error = errorMessage
                         )
                     }
                 )
             } catch (e: Exception) {
+                val errorMessage = if (!networkMonitor.isCurrentlyOnline()) {
+                    "No internet connection. Please check your network and try again."
+                } else {
+                    "Error validating code: ${e.message}"
+                }
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    error = "Error validating code: ${e.message}"
+                    error = errorMessage
                 )
             }
         }

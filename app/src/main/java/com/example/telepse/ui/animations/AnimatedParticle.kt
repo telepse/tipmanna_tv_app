@@ -133,11 +133,6 @@ internal fun AnimatedParticle(
     val rotation = rotationAnimatable.value
     val scale = scaleAnimatable.value
     
-    // Hide particle completely when scale is 0 or very small
-    if (scale <= 0.01f) {
-        return // Don't render at all when invisible
-    }
-    
     // Calculate variable size if particleSizeRatio is provided
     val actualSize = if (particle.particleSizeRatio != null && minSize != null && maxSize != null) {
         val sizeRatio = particle.particleSizeRatio
@@ -156,18 +151,28 @@ internal fun AnimatedParticle(
         ImageRequest.Builder(context)
             .data(particle.imageUrl)
             .crossfade(true)
+            .error(android.R.drawable.ic_menu_gallery) // Fallback if image fails to load
             .build()
     )
     
+    // Always render the Box - use alpha to control visibility
+    // This ensures particles are in the composition tree and can animate properly
     Box(
         modifier = Modifier
             .graphicsLayer {
                 translationX = currentX
                 translationY = currentY
                 rotationZ = rotation
-                scaleX = scale
-                scaleY = scale
-                alpha = scale.coerceIn(0f, 1f) // Ensure alpha matches scale for complete fade
+                // Use a minimum scale to ensure particles are always slightly visible when animating
+                // This prevents them from being completely invisible during the animation
+                val effectiveScale = if (scale <= 0.01f && position > 0f) {
+                    0.01f // Minimum visibility when animating
+                } else {
+                    scale.coerceAtLeast(0f)
+                }
+                scaleX = effectiveScale
+                scaleY = effectiveScale
+                alpha = effectiveScale.coerceIn(0f, 1f) // Ensure alpha matches scale for complete fade
             }
             .size(actualSize)
     ) {

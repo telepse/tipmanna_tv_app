@@ -43,6 +43,9 @@ import androidx.media3.ui.PlayerView
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Text
 import com.example.telepse.R
+import com.example.telepse.data.network.NetworkMonitor
+import com.example.telepse.ui.network.NetworkStatusIndicator
+import com.example.telepse.ui.network.rememberNetworkMonitor
 import com.example.telepse.ui.animations.CharacterAnimation
 import com.example.telepse.ui.background.getEventBackgroundResource
 import com.example.telepse.ui.theme.*
@@ -98,6 +101,7 @@ fun FundraisingMilestoneScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+    val networkMonitor = rememberNetworkMonitor()
     
     // Show toast messages - track last shown message to avoid duplicates
     var lastShownToast by remember { mutableStateOf<String?>(null) }
@@ -133,6 +137,14 @@ fun FundraisingMilestoneScreen(
         val textColor = getTextColorForBackground(event.backgroundType, event.eventBackground)
         
         Box(modifier = Modifier.fillMaxSize()) {
+            // Network Status Indicator - shows at top when offline
+            NetworkStatusIndicator(
+                networkMonitor = networkMonitor,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .zIndex(2000f) // Above everything
+            )
+            
             // Video Background
             VideoBackground(
                 uri = backgroundUri,
@@ -196,43 +208,43 @@ fun FundraisingMilestoneScreen(
                     // Top group - stays at the top (reduced spacing to move content up)
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
+                ) {
                         // 1. "Together you've sent" - First (bold like amount)
-                        Text(
+                    Text(
                             text = if (event.showLatestAmount == true) "Latest amount received" else "Together you've sent",
-                            fontSize = 20.sp,
+                        fontSize = 20.sp,
                             fontWeight = FontWeight.Bold, // Bold like the amount
                             color = textColor,
                             modifier = Modifier.padding(bottom = 8.dp) // Reduced from 12.dp
-                        )
-                        
+                    )
+                    
                         // 2. Amount - Second (bold)
                         val displayAmount = if (event.showLatestAmount == true) {
                             event.latestTipAmount?.toInt() ?: 0
                         } else {
                             event.amountRaised?.toInt() ?: 0
                         }
-                        Text(
+                    Text(
                             text = "£$displayAmount",
-                            fontSize = 56.sp,
-                            fontWeight = FontWeight.Bold,
+                        fontSize = 56.sp,
+                        fontWeight = FontWeight.Bold,
                             color = textColor,
                             modifier = Modifier.padding(bottom = 6.dp) // Reduced from 8.dp
-                        )
-                        
+                    )
+                    
                         // 3. Money for - Auto-scrolling text
-                        event.tipUsageDisclosure?.let { disclosures ->
-                            if (disclosures.isNotEmpty()) {
-                                ScrollingTipUsageText(
-                                    disclosures = disclosures,
+                    event.tipUsageDisclosure?.let { disclosures ->
+                        if (disclosures.isNotEmpty()) {
+                            ScrollingTipUsageText(
+                                disclosures = disclosures,
                                     textColor = textColor,
-                                    modifier = Modifier
+                                modifier = Modifier
                                         .width(200.dp)
                                         .padding(bottom = 6.dp) // Reduced from 8.dp
-                                )
-                            }
+                            )
                         }
-                        
+                    }
+                    
                         // 4. Progress Bar Section - Always show progress bar, but hide amount text when hideProgressBarAmount is true
                         val amountRaised = event.amountRaised?.toInt() ?: 0
                         // Track when tips are received to trigger glow animation
@@ -297,27 +309,27 @@ fun FundraisingMilestoneScreen(
                         Spacer(modifier = Modifier.height(8.dp))
                         
                         // 6. Title - Last (Event Name with background #212121 and border #667185)
-                        Box(
-                            modifier = Modifier
+                    Box(
+                        modifier = Modifier
                                 .widthIn(max = 200.dp)
-                                .background(
-                                    color = Color(0xFF212121), // bg-[#212121]
-                                    shape = RoundedCornerShape(6.dp)
-                                )
-                                .border(
-                                    width = 1.dp,
-                                    color = Color(0xFF667185), // border-[#667185]
-                                    shape = RoundedCornerShape(6.dp)
-                                )
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
-                        ) {
-                            Text(
-                                text = event.eventName,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = Color.White,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                            .background(
+                                color = Color(0xFF212121), // bg-[#212121]
+                                shape = RoundedCornerShape(6.dp)
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = Color(0xFF667185), // border-[#667185]
+                                shape = RoundedCornerShape(6.dp)
+                            )
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = event.eventName,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -492,12 +504,12 @@ fun ProgressBarSection(
                 Spacer(modifier = Modifier.width(16.dp))
                 
                 // Goal Icon (Diamond/Gem) - icon only, target is in row below
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_goal_diamond),
-                    contentDescription = "Goal",
-                    modifier = Modifier.size(36.dp),
-                    tint = Color.Unspecified // Use original colors from SVG
-                )
+                    Image(
+                        painter = painterResource(id = R.drawable.diamond),
+                        contentDescription = "Goal",
+                        modifier = Modifier.size(36.dp),
+                        contentScale = ContentScale.Fit
+                    )
             }
         }
         
@@ -625,12 +637,12 @@ fun QRCodeImage(
     
     qrBitmap?.let { bitmap ->
         // Display QR code directly without extra container - the bitmap already has white background
-        Image(
-            bitmap = bitmap.asImageBitmap(),
-            contentDescription = "QR Code",
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = "QR Code",
             modifier = modifier,
             contentScale = ContentScale.FillBounds
-        )
+            )
     } ?: run {
         Box(
             modifier = modifier
@@ -701,19 +713,6 @@ private fun AnimationOverlay(
     val queueSize = animations.size
     
     android.util.Log.d("AnimationOverlay", "🎬 Queue: $queueSize animations, displaying: ${currentAnimation.animationType} (id: ${currentAnimation.id})")
-    
-    // Show toast when new animations are added to queue
-    var previousQueueSize by remember { mutableStateOf(0) }
-    LaunchedEffect(queueSize) {
-        if (queueSize > previousQueueSize) {
-            try {
-                Toast.makeText(context, "📋 Queue: $queueSize animations", Toast.LENGTH_SHORT).show()
-                previousQueueSize = queueSize
-            } catch (e: Exception) {
-                android.util.Log.e("AnimationOverlay", "Error showing toast", e)
-            }
-        }
-    }
     
     // Display only the first animation - sequential playback
     // Use zIndex to ensure animations appear on top of all content

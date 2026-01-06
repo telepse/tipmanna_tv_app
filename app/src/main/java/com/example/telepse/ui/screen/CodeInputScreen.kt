@@ -29,6 +29,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.example.telepse.R
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.ExperimentalTvMaterial3Api
@@ -36,6 +37,8 @@ import androidx.tv.material3.MaterialTheme
 import coil.compose.rememberAsyncImagePainter
 import coil.request.ImageRequest
 import com.example.telepse.data.model.Event
+import com.example.telepse.ui.network.NetworkStatusIndicator
+import com.example.telepse.ui.network.rememberNetworkMonitor
 import com.example.telepse.ui.theme.*
 import com.example.telepse.ui.viewmodel.CodeInputViewModel
 import java.time.Instant
@@ -56,6 +59,7 @@ fun CodeInputScreen(
     val uiState by viewModel.uiState.collectAsState()
     var textValue by remember { mutableStateOf(uiState.code) }
     val context = LocalContext.current
+    val networkMonitor = rememberNetworkMonitor()
     
     val currentEvent = viewModel.getCurrentEvent()
     val hasEvents = uiState.events.isNotEmpty()
@@ -104,6 +108,14 @@ fun CodeInputScreen(
             contentDescription = "Background Pattern",
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.FillBounds
+        )
+        
+        // Network Status Indicator - shows at top when offline
+        NetworkStatusIndicator(
+            networkMonitor = networkMonitor,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .zIndex(2000f) // Above everything
         )
         
         // Content - Reduced width and scrollable

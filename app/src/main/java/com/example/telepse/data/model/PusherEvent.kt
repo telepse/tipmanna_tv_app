@@ -46,3 +46,14 @@ data class ScreenSettingsUpdatedEvent(
     val backgroundType: String? = null
 )
 
+/**
+ * Model for latest-tip-updated Pusher event payload.
+ * 
+ * This event is fired when a tip is made and updates the latest tip amount
+ * that is displayed on the screen.
+ */
+@Serializable
+data class LatestTipUpdatedEvent(
+    val latestTipAmount: Double // The amount just tipped
+)
+

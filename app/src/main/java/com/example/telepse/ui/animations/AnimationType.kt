@@ -10,6 +10,7 @@ package com.example.telepse.ui.animations
  * - [BURST]: Explodes from center, scattering in all directions
  * - [SCREEN_SHOCK]: Icons arranged in rows with camera shake effect
  * - [FLOAT]: Characters float across the middle of the screen in a W-shaped pattern
+ * - [LUXURIOUS]: Videos play at bottom center with stagger effect
  */
 enum class AnimationType {
     CONFETTI,
@@ -17,5 +18,6 @@ enum class AnimationType {
     FALL,
     BURST,
     SCREEN_SHOCK,
-    FLOAT
+    FLOAT,
+    LUXURIOUS
 }

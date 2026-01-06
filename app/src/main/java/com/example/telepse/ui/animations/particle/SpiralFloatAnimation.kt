@@ -84,15 +84,19 @@ internal fun SpiralFloatAnimation(
     // View positions (in vw units, converted to pixels)
     val VIEW_START = 120f // 120vw
     val VIEW_END = -20f // -20vw
-    val vwToPx = widthPx / 100f // 1vw = widthPx / 100
+    // Prevent division by zero
+    val vwToPx = if (widthPx > 0f) widthPx / 100f else 1f // 1vw = widthPx / 100
     
     // Lane positioning
-    val laneTopPx = heightPx * (laneTop / 100f)
-    val laneHeightPx = heightPx * (laneHeight / 100f)
+    // Prevent division by zero and ensure valid values
+    val laneTopPx = if (heightPx > 0f) heightPx * (laneTop / 100f).coerceIn(0f, 100f) else 0f
+    val laneHeightPx = if (heightPx > 0f) heightPx * (laneHeight / 100f).coerceIn(0f, 100f) else 0f
     val laneCenterY = laneTopPx + (laneHeightPx / 2f)
     
     // Spacing (effectiveSpacingVw)
-    val isMobile = widthPx < 768f * density.density // Approximate mobile check
+    // Check if mobile: width < 768dp converted to pixels
+    val mobileThresholdPx = with(density) { 768.dp.toPx() }
+    val isMobile = widthPx < mobileThresholdPx
     val effectiveSpacingVw = spacing * (if (isMobile) 0.6f else 1.0f)
     val effectiveSpacingPx = effectiveSpacingVw * vwToPx
     
@@ -116,26 +120,39 @@ internal fun SpiralFloatAnimation(
     val elapsedTime = timeAnimatable.value
     
     // PHASE 1: MOTION (85% of duration)
-    val motionProgress = (elapsedTime / motionDuration).coerceIn(0f, 1f)
+    // Prevent division by zero
+    val motionProgress = if (motionDuration > 0f) {
+        (elapsedTime / motionDuration).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
     val thetaBase = motionProgress * PI.toFloat() * 2f * rotations
     
     // PHASE 3: FADE (last 10% of duration, after hold)
-    val fadeProgress = if (elapsedTime > motionDuration + holdDuration) {
+    val fadeProgress = if (fadeDuration > 0f && elapsedTime > motionDuration + holdDuration) {
         ((elapsedTime - motionDuration - holdDuration) / fadeDuration).coerceIn(0f, 1f)
     } else {
         0f
     }
     
     // Create icons (5 total)
+    // Ensure we have at least one icon to avoid crashes
     val iconList = remember(icons) {
-        (0 until ICON_COUNT).map { i ->
-            SpiralFloatIcon(
-                id = i,
-                imageUrl = icons[i % icons.size],
-                phase = (i * 2f * PI.toFloat()) / ICON_COUNT
-            )
+        if (icons.isEmpty()) {
+            emptyList()
+        } else {
+            (0 until ICON_COUNT).map { i ->
+                SpiralFloatIcon(
+                    id = i,
+                    imageUrl = icons[i % icons.size],
+                    phase = (i * 2f * PI.toFloat()) / ICON_COUNT
+                )
+            }
         }
     }
+    
+    // Early return if no icons
+    if (iconList.isEmpty()) return
     
     Box(
         modifier = Modifier
@@ -152,13 +169,13 @@ internal fun SpiralFloatAnimation(
             // Convert vw to pixels: 1vw = widthPx / 100
             val baseXVw = VIEW_START + (VIEW_END - VIEW_START) * motionProgress
             val xVw = baseXVw + icon.id * effectiveSpacingVw
-            val xPx = xVw * vwToPx
+            val xPx = (xVw * vwToPx).coerceIn(-widthPx * 2f, widthPx * 2f) // Clamp to reasonable range
             
             // Y position: Math.sin(theta) * radius + laneHeight * 0.5
             // Web version: y = Math.sin(theta) * radius + laneHeight * 0.5
             // This is relative to the lane, so we add it to laneCenterY
             val yOffset = sin(theta) * currentRadius
-            val yPx = laneCenterY + yOffset
+            val yPx = (laneCenterY + yOffset).coerceIn(0f, heightPx) // Clamp to screen bounds
             
             // Opacity: 1 - fadeProgress
             val opacity = 1f - fadeProgress
