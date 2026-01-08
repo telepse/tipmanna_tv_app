@@ -35,8 +35,7 @@ data class FundraisingMilestoneUiState(
     val event: Event? = null,
     val isLoading: Boolean = false,
     val error: String? = null,
-    val pendingAnimations: List<AnimationTrigger> = emptyList(),
-    val toastMessage: String? = null
+    val pendingAnimations: List<AnimationTrigger> = emptyList()
 )
 
 @HiltViewModel
@@ -52,20 +51,6 @@ class FundraisingMilestoneViewModel @Inject constructor(
     private var currentEventId: String? = null
     private var isPusherInitialized = false
     private var flowJobs: MutableList<kotlinx.coroutines.Job> = mutableListOf()
-    
-    private fun showToast(message: String) {
-        // Only update if message is different to avoid rapid state updates
-        if (_uiState.value.toastMessage != message) {
-            _uiState.value = _uiState.value.copy(toastMessage = message)
-            // Clear toast after a short delay
-            viewModelScope.launch {
-                kotlinx.coroutines.delay(2000) // Show for 2 seconds
-                if (_uiState.value.toastMessage == message) {
-                    _uiState.value = _uiState.value.copy(toastMessage = null)
-                }
-            }
-        }
-    }
     
     /**
      * Loads event details and initializes Pusher subscription.
@@ -88,8 +73,7 @@ class FundraisingMilestoneViewModel @Inject constructor(
                     event = null,
                     isLoading = false,
                     error = "No internet connection. Please check your network and try again.",
-                    pendingAnimations = emptyList(),
-                    toastMessage = "No internet connection"
+                    pendingAnimations = emptyList()
                 )
                 return@launch
             }
@@ -111,8 +95,7 @@ class FundraisingMilestoneViewModel @Inject constructor(
                 event = null, // Clear old event immediately
                 isLoading = true,
                 error = null,
-                pendingAnimations = emptyList(), // Clear animations when loading new event
-                toastMessage = null
+                pendingAnimations = emptyList() // Clear animations when loading new event
             )
             
             try {
@@ -132,7 +115,6 @@ class FundraisingMilestoneViewModel @Inject constructor(
                             initializePusher(eventId, event)
                         } else {
                             Log.w("FundraisingMilestoneViewModel", "⚠️ Network lost during load, skipping Pusher initialization")
-                            showToast("⚠️ Network connection lost")
                         }
                     },
                     onFailure = { exception ->
@@ -217,21 +199,29 @@ class FundraisingMilestoneViewModel @Inject constructor(
                 // Wait a bit for connection to establish
                 kotlinx.coroutines.delay(500)
                 
-                // Subscribe to channel
-                val channelName = "event-$eventId"
-                if (!pusherService.subscribeToChannel(channelName)) {
-                    Log.e("FundraisingMilestoneViewModel", "Failed to subscribe to channel: $channelName")
+                // Subscribe to public channel (for animations, amount updates, latest tip)
+                val publicChannelName = "event-$eventId"
+                if (!pusherService.subscribeToPublicChannel(publicChannelName)) {
+                    Log.e("FundraisingMilestoneViewModel", "Failed to subscribe to public channel: $publicChannelName")
                     return@launch
                 }
                 
-                // Wait a bit for channel subscription to be ready
-                kotlinx.coroutines.delay(300)
+                // Subscribe to private channel (for screen settings)
+                val privateChannelName = "private-event-$eventId"
+                if (!pusherService.subscribeToPrivateChannel(privateChannelName)) {
+                    Log.e("FundraisingMilestoneViewModel", "Failed to subscribe to private channel: $privateChannelName")
+                    return@launch
+                }
                 
-                Log.d("FundraisingMilestoneViewModel", "✅ Pusher initialized and subscribed to: $channelName")
-                Log.d("FundraisingMilestoneViewModel", "   - Waiting for tip-animation events...")
+                // Wait a bit for channel subscriptions to be ready
+                kotlinx.coroutines.delay(500)
+                
+                Log.d("FundraisingMilestoneViewModel", "✅ Pusher initialized and subscribed to:")
+                Log.d("FundraisingMilestoneViewModel", "   - Public channel: $publicChannelName")
+                Log.d("FundraisingMilestoneViewModel", "   - Private channel: $privateChannelName")
                 
                 // Log that we're about to start observing
-                Log.d("FundraisingMilestoneViewModel", "   - About to start observing tip-animation flow...")
+                Log.d("FundraisingMilestoneViewModel", "   - About to start observing flows...")
             } catch (e: Exception) {
                 // Handle Pusher initialization errors
                 Log.e("FundraisingMilestoneViewModel", "Error initializing Pusher", e)
@@ -413,17 +403,30 @@ class FundraisingMilestoneViewModel @Inject constructor(
     private fun updateScreenSettings(settingsUpdated: com.example.telepse.data.model.ScreenSettingsUpdatedEvent) {
         val currentEvent = _uiState.value.event
         if (currentEvent != null) {
+            Log.d("FundraisingMilestoneViewModel", "🔄 Updating screen settings from Pusher event")
+            Log.d("FundraisingMilestoneViewModel", "   - eventBackground: ${settingsUpdated.eventBackground}")
+            Log.d("FundraisingMilestoneViewModel", "   - backgroundType: ${settingsUpdated.backgroundType}")
+            Log.d("FundraisingMilestoneViewModel", "   - hideProgressBarAmount: ${settingsUpdated.hideProgressBarAmount}")
+            Log.d("FundraisingMilestoneViewModel", "   - showLatestAmount: ${settingsUpdated.showLatestAmount}")
+            Log.d("FundraisingMilestoneViewModel", "   - moneyFor: ${settingsUpdated.moneyFor}")
+            Log.d("FundraisingMilestoneViewModel", "   - tipUsageDisclosure: ${settingsUpdated.tipUsageDisclosure?.size} items")
+            
             _uiState.value = _uiState.value.copy(
                 event = currentEvent.copy(
-                    amountRaised = settingsUpdated.amountRaised ?: currentEvent.amountRaised,
-                    numOfTips = settingsUpdated.numOfTips ?: currentEvent.numOfTips,
+                    eventBackground = settingsUpdated.eventBackground ?: currentEvent.eventBackground,
+                    backgroundType = settingsUpdated.backgroundType ?: currentEvent.backgroundType,
                     hideProgressBarAmount = settingsUpdated.hideProgressBarAmount ?: currentEvent.hideProgressBarAmount,
                     showLatestAmount = settingsUpdated.showLatestAmount ?: currentEvent.showLatestAmount,
-                    latestTipAmount = settingsUpdated.latestTipAmount ?: currentEvent.latestTipAmount,
+                    moneyFor = settingsUpdated.moneyFor ?: currentEvent.moneyFor,
                     tipUsageDisclosure = settingsUpdated.tipUsageDisclosure ?: currentEvent.tipUsageDisclosure,
-                    backgroundType = settingsUpdated.backgroundType ?: currentEvent.backgroundType
+                    amountRaised = settingsUpdated.amountRaised ?: currentEvent.amountRaised,
+                    numOfTips = settingsUpdated.numOfTips ?: currentEvent.numOfTips,
+                    latestTipAmount = settingsUpdated.latestTipAmount ?: currentEvent.latestTipAmount
                 )
             )
+            Log.d("FundraisingMilestoneViewModel", "✅ Screen settings updated successfully")
+        } else {
+            Log.w("FundraisingMilestoneViewModel", "⚠️ Cannot update screen settings: event is null")
         }
     }
     

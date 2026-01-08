@@ -59,7 +59,6 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.zIndex
-import android.widget.Toast
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.rememberScrollState
@@ -102,21 +101,6 @@ fun FundraisingMilestoneScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val networkMonitor = rememberNetworkMonitor()
-    
-    // Show toast messages - track last shown message to avoid duplicates
-    var lastShownToast by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(uiState.toastMessage) {
-        uiState.toastMessage?.let { message ->
-            if (message != lastShownToast) {
-                try {
-                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                    lastShownToast = message
-                } catch (e: Exception) {
-                    android.util.Log.e("FundraisingMilestoneScreen", "Error showing toast", e)
-                }
-            }
-        }
-    }
     
     // Fetch event details
     LaunchedEffect(eventId) {
@@ -402,12 +386,16 @@ fun VideoBackground(
     val context = LocalContext.current
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
-            val mediaItem = MediaItem.fromUri(uri)
-            setMediaItem(mediaItem)
             repeatMode = Player.REPEAT_MODE_ONE
-            prepare()
-            playWhenReady = true
         }
+    }
+    
+    // Update media item when URI changes
+    LaunchedEffect(uri) {
+        val mediaItem = MediaItem.fromUri(uri)
+        exoPlayer.setMediaItem(mediaItem)
+        exoPlayer.prepare()
+        exoPlayer.playWhenReady = true
     }
     
     DisposableEffect(Unit) {
@@ -465,10 +453,10 @@ fun ProgressBarSection(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Progress Bar Container (narrower, taller)
+                // Progress Bar Container (longer, taller)
                 Box(
                     modifier = Modifier
-                        .width(240.dp) // Narrower fixed width
+                        .width(320.dp) // Longer fixed width
                         .height(28.dp) // Increased height a bit more
                         .background(Color.Black, RoundedCornerShape(6.dp)) // Just a bit rounded
                 ) {

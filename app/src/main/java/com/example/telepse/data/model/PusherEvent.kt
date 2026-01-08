@@ -37,13 +37,15 @@ data class AmountUpdatedEvent(
  */
 @Serializable
 data class ScreenSettingsUpdatedEvent(
-    val amountRaised: Double? = null,
-    val numOfTips: Int? = null,
+    val eventBackground: String? = null,
+    val backgroundType: String? = null,
     val hideProgressBarAmount: Boolean? = null,
     val showLatestAmount: Boolean? = null,
-    val latestTipAmount: Double? = null,
+    val moneyFor: String? = null,
     val tipUsageDisclosure: List<TipUsageDisclosure>? = null,
-    val backgroundType: String? = null
+    val amountRaised: Double? = null,
+    val numOfTips: Int? = null,
+    val latestTipAmount: Double? = null
 )
 
 /**
