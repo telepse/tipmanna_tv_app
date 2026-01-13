@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.telepse.data.model.Character
 import com.example.telepse.data.model.Event
+import com.example.telepse.data.model.TipAnimationEvent
 import com.example.telepse.data.network.NetworkMonitor
 import com.example.telepse.data.realtime.PusherService
 import com.example.telepse.data.repository.EventRepository
@@ -15,6 +16,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import android.util.Log
 import javax.inject.Inject
 
@@ -52,6 +57,10 @@ class FundraisingMilestoneViewModel @Inject constructor(
     private var isPusherInitialized = false
     private var flowJobs: MutableList<kotlinx.coroutines.Job> = mutableListOf()
     
+    // CRITICAL: Mutex ensures only one event switch at a time
+    // This prevents race conditions when switching events rapidly
+    private val eventSwitchMutex = Mutex()
+    
     /**
      * Loads event details and initializes Pusher subscription.
      * 
@@ -66,81 +75,182 @@ class FundraisingMilestoneViewModel @Inject constructor(
      */
     fun loadEvent(eventId: String) {
         viewModelScope.launch {
-            // Check network status before attempting to load
-            if (!networkMonitor.isCurrentlyOnline()) {
-                Log.w("FundraisingMilestoneViewModel", "⚠️ No network connection, cannot load event")
-                _uiState.value = FundraisingMilestoneUiState(
-                    event = null,
-                    isLoading = false,
-                    error = "No internet connection. Please check your network and try again.",
-                    pendingAnimations = emptyList()
-                )
-                return@launch
-            }
-            
-            // If switching to a different event, disconnect from the old one first
-            if (currentEventId != null && currentEventId != eventId) {
-                Log.d("FundraisingMilestoneViewModel", "🔄 Switching events: $currentEventId -> $eventId")
-                disconnectFromCurrentEvent()
-            }
-            
-            // Also disconnect if same event but Pusher needs reinitialization
-            if (currentEventId == eventId && !isPusherInitialized) {
-                Log.d("FundraisingMilestoneViewModel", "🔄 Reinitializing Pusher for event: $eventId")
-                disconnectFromCurrentEvent()
-            }
-            
-            // Reset state immediately when loading a new event to prevent showing old data
-            _uiState.value = FundraisingMilestoneUiState(
-                event = null, // Clear old event immediately
-                isLoading = true,
-                error = null,
-                pendingAnimations = emptyList() // Clear animations when loading new event
-            )
-            
-            try {
-                // Fetch event details first
-                val result = eventRepository.getEventById(eventId)
-                result.fold(
-                    onSuccess = { event ->
-                        currentEventId = eventId
+            // CRITICAL: Serialize all event switches with mutex
+            // This ensures only one event switch happens at a time
+            eventSwitchMutex.withLock {
+                try {
+                    Log.d("FundraisingMilestoneViewModel", "📥 [LOAD_EVENT] Starting to load event (mutex acquired)")
+                    Log.d("FundraisingMilestoneViewModel", "   - Requested event ID: $eventId")
+                    Log.d("FundraisingMilestoneViewModel", "   - Current event ID: $currentEventId")
+                    Log.d("FundraisingMilestoneViewModel", "   - Is Pusher initialized: $isPusherInitialized")
+                    
+                    // DON'T clear event immediately - keep showing old event until new one loads
+                    // This prevents UI from showing null state and crashing
+                    // Only set loading if we don't have an event yet
+                    if (_uiState.value.event == null) {
+                        Log.d("FundraisingMilestoneViewModel", "   [STEP 1] No event loaded, setting loading state...")
                         _uiState.value = _uiState.value.copy(
-                            event = event,
-                            isLoading = false,
+                            isLoading = true,
                             error = null
                         )
-                        
-                        // Initialize Pusher and subscribe after fetching event (only if online)
-                        if (networkMonitor.isCurrentlyOnline()) {
-                            initializePusher(eventId, event)
-                        } else {
-                            Log.w("FundraisingMilestoneViewModel", "⚠️ Network lost during load, skipping Pusher initialization")
-                        }
-                    },
-                    onFailure = { exception ->
-                        // Check if error is due to network
-                        val errorMessage = if (!networkMonitor.isCurrentlyOnline()) {
-                            "No internet connection. Please check your network and try again."
-                        } else {
-                            exception.message ?: "Failed to load event"
-                        }
-                        _uiState.value = _uiState.value.copy(
-                            isLoading = false,
-                            error = errorMessage
-                        )
+                        Log.d("FundraisingMilestoneViewModel", "   [STEP 1] ✅ Loading state set")
+                    } else {
+                        Log.d("FundraisingMilestoneViewModel", "   [STEP 1] Event exists, keeping it visible during switch")
                     }
-                )
-            } catch (e: Exception) {
-                val errorMessage = if (!networkMonitor.isCurrentlyOnline()) {
-                    "No internet connection. Please check your network and try again."
-                } else {
-                    "Error loading event: ${e.message}"
+                    
+                    performEventLoad(eventId)
+                } catch (e: Exception) {
+                    Log.e("FundraisingMilestoneViewModel", "❌ Critical error in loadEvent", e)
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        error = "Failed to load event: ${e.message}"
+                    )
                 }
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    error = errorMessage
-                )
             }
+        }
+    }
+    
+    /**
+     * Performs the actual event loading logic within the mutex lock.
+     */
+    private suspend fun performEventLoad(eventId: String) {
+        // Check network status before attempting to load
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 2] Checking network connectivity...")
+        if (!networkMonitor.isCurrentlyOnline()) {
+            Log.w("FundraisingMilestoneViewModel", "   [STEP 2] ❌ No network connection")
+            Log.w("FundraisingMilestoneViewModel", "⚠️ No network connection, cannot load event")
+            _uiState.value = FundraisingMilestoneUiState(
+                event = null,
+                isLoading = false,
+                error = "No internet connection. Please check your network and try again.",
+                pendingAnimations = emptyList()
+            )
+            return
+        }
+        
+        // If switching to a different event, disconnect from the old one first
+        if (currentEventId != null && currentEventId != eventId) {
+            Log.d("FundraisingMilestoneViewModel", "   [STEP 2] 🔄 Switching events: $currentEventId -> $eventId")
+            Log.d("FundraisingMilestoneViewModel", "      - Direction: ${if (eventId > currentEventId!!) "FORWARD" else "BACKWARD"}")
+            
+            // CRITICAL: Clear UI state FIRST to show loading screen
+            // This prevents the screen from trying to render old event data with new player manager
+            Log.d("FundraisingMilestoneViewModel", "   [STEP 2a] Clearing UI state to show loading...")
+            _uiState.value = FundraisingMilestoneUiState(
+                event = null,
+                isLoading = true,
+                error = null,
+                pendingAnimations = emptyList()
+            )
+            Log.d("FundraisingMilestoneViewModel", "   [STEP 2a] ✅ UI state cleared")
+            
+            // Give Compose time to fully recompose with the loading screen
+            // This prevents race conditions with lingering effects from previous renders
+            // Longer delay needed after background changes or complex UI updates
+            Log.d("FundraisingMilestoneViewModel", "   [STEP 2b] Waiting for Compose to recompose...")
+            delay(200)
+            Log.d("FundraisingMilestoneViewModel", "   [STEP 2b] ✅ Recomposition wait complete")
+            
+            try {
+                disconnectFromCurrentEvent()
+                Log.d("FundraisingMilestoneViewModel", "   [STEP 2] ✅ Disconnected from previous event")
+            } catch (e: Exception) {
+                Log.e("FundraisingMilestoneViewModel", "   [STEP 2] ❌ Error disconnecting from previous event", e)
+                // Force cleanup even on error
+                flowJobs.forEach { job ->
+                    try {
+                        job.cancelAndJoin()
+                    } catch (e: Exception) {
+                        Log.e("FundraisingMilestoneViewModel", "Error canceling job", e)
+                    }
+                }
+                flowJobs.clear()
+                try {
+                    pusherService.disconnect()
+                } catch (e: Exception) {
+                    Log.e("FundraisingMilestoneViewModel", "Error disconnecting Pusher", e)
+                }
+                isPusherInitialized = false
+                currentEventId = null
+                
+                // Wait for cleanup to settle
+                delay(300)
+            }
+        }
+        
+        // Also disconnect if same event but Pusher needs reinitialization
+        if (currentEventId == eventId && !isPusherInitialized) {
+            Log.d("FundraisingMilestoneViewModel", "🔄 Reinitializing Pusher for event: $eventId")
+            try {
+                disconnectFromCurrentEvent()
+                delay(300)
+            } catch (e: Exception) {
+                Log.e("FundraisingMilestoneViewModel", "Error disconnecting for reinitialization", e)
+                // Force cleanup
+                flowJobs.forEach { job ->
+                    try {
+                        job.cancelAndJoin()
+                    } catch (e: Exception) {
+                        Log.e("FundraisingMilestoneViewModel", "Error canceling job", e)
+                    }
+                }
+                flowJobs.clear()
+            }
+        }
+        
+        try {
+            Log.d("FundraisingMilestoneViewModel", "   [STEP 3] Fetching event details from repository...")
+            // Fetch event details first
+            val result = eventRepository.getEventById(eventId)
+            result.fold(
+                onSuccess = { event ->
+                    Log.d("FundraisingMilestoneViewModel", "   [STEP 4] ✅ Event fetched successfully")
+                    Log.d("FundraisingMilestoneViewModel", "      - Event name: ${event.eventName}")
+                    Log.d("FundraisingMilestoneViewModel", "      - Background type: ${event.backgroundType}")
+                    
+                    currentEventId = eventId
+                    Log.d("FundraisingMilestoneViewModel", "   [STEP 5] Updating UI state with event...")
+                    _uiState.value = _uiState.value.copy(
+                        event = event,
+                        isLoading = false,
+                        error = null
+                    )
+                    Log.d("FundraisingMilestoneViewModel", "   [STEP 5] ✅ UI state updated")
+                    
+                    // Initialize Pusher and subscribe after fetching event (only if online)
+                    Log.d("FundraisingMilestoneViewModel", "   [STEP 6] Checking network before initializing Pusher...")
+                    if (networkMonitor.isCurrentlyOnline()) {
+                        Log.d("FundraisingMilestoneViewModel", "   [STEP 6] ✅ Network online, initializing Pusher...")
+                        initializePusher(eventId, event)
+                    } else {
+                        Log.w("FundraisingMilestoneViewModel", "⚠️ Network lost during load, skipping Pusher initialization")
+                    }
+                },
+                onFailure = { exception ->
+                    Log.e("FundraisingMilestoneViewModel", "   [STEP 4] ❌ Failed to fetch event", exception)
+                    // Check if error is due to network
+                    val errorMessage = if (!networkMonitor.isCurrentlyOnline()) {
+                        "No internet connection. Please check your network and try again."
+                    } else {
+                        exception.message ?: "Failed to load event"
+                    }
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        error = errorMessage
+                    )
+                }
+            )
+        } catch (e: Exception) {
+            Log.e("FundraisingMilestoneViewModel", "   [STEP 3] ❌ Error loading event", e)
+            val errorMessage = if (!networkMonitor.isCurrentlyOnline()) {
+                "No internet connection. Please check your network and try again."
+            } else {
+                "Error loading event: ${e.message}"
+            }
+            _uiState.value = _uiState.value.copy(
+                isLoading = false,
+                error = errorMessage
+            )
         }
     }
     
@@ -149,23 +259,52 @@ class FundraisingMilestoneViewModel @Inject constructor(
      * Called when switching to a different event.
      */
     private suspend fun disconnectFromCurrentEvent() {
-        Log.d("FundraisingMilestoneViewModel", "🔌 Disconnecting from current event")
+        Log.d("FundraisingMilestoneViewModel", "🔌 [DISCONNECT] Starting disconnect from current event")
+        Log.d("FundraisingMilestoneViewModel", "   - Current event ID: $currentEventId")
+        Log.d("FundraisingMilestoneViewModel", "   - Is Pusher initialized: $isPusherInitialized")
+        Log.d("FundraisingMilestoneViewModel", "   - Flow jobs count: ${flowJobs.size}")
         
         // Cancel all flow collection jobs
-        flowJobs.forEach { job ->
-            job.cancel()
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 1] Cancelling flow collection jobs...")
+        flowJobs.forEachIndexed { index, job ->
+            try {
+                Log.d("FundraisingMilestoneViewModel", "      - Cancelling job $index/${flowJobs.size}")
+                job.cancel()
+                Log.d("FundraisingMilestoneViewModel", "      - ✅ Job $index cancelled")
+            } catch (e: Exception) {
+                Log.e("FundraisingMilestoneViewModel", "      - ❌ Error cancelling job $index", e)
+            }
         }
         flowJobs.clear()
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 1] ✅ All flow jobs cancelled and cleared")
         
         // Disconnect from Pusher
-        pusherService.disconnect()
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 2] Disconnecting from Pusher service...")
+        try {
+            pusherService.disconnect()
+            Log.d("FundraisingMilestoneViewModel", "   [STEP 2] ✅ Pusher disconnect called")
+        } catch (e: Exception) {
+            Log.e("FundraisingMilestoneViewModel", "   [STEP 2] ❌ Error calling Pusher disconnect", e)
+        }
+        
+        // Reset flags
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 3] Resetting flags...")
         isPusherInitialized = false
         currentEventId = null
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 3] ✅ Flags reset")
         
-        // Small delay to ensure cleanup completes
-        kotlinx.coroutines.delay(200)
+        // Brief pause to ensure channel unsubscribe completes
+        // We don't call pusher.disconnect() anymore (it causes crashes), so this is minimal
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 4] Brief pause (100ms) for channel unsubscribe to complete...")
+        kotlinx.coroutines.delay(100)
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 4] ✅ Pause complete")
         
-        Log.d("FundraisingMilestoneViewModel", "✅ Disconnected and cleaned up")
+        // Reset isDisconnecting flag so next initialize can proceed immediately
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 5] Resetting PusherService.isDisconnecting flag...")
+        pusherService.resetDisconnectingFlag()
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 5] ✅ Flag reset")
+        
+        Log.d("FundraisingMilestoneViewModel", "✅ [DISCONNECT] Disconnect from current event complete")
     }
     
     /**
@@ -232,11 +371,36 @@ class FundraisingMilestoneViewModel @Inject constructor(
         val tipAnimationJob = viewModelScope.launch {
             try {
                 Log.d("FundraisingMilestoneViewModel", "🔍 Starting to observe tip-animation flow...")
-                // Don't show toast during initialization to avoid crashes
+                
+                // Wait for event to be loaded before processing animations
+                // This prevents animations from failing when they arrive before event data is ready
+                var eventReady = false
+                var waitAttempts = 0
+                while (!eventReady && waitAttempts < 50) { // Wait up to 5 seconds for event
+                    val currentEvent = _uiState.value.event
+                    if (currentEvent != null && currentEvent.characterSets != null) {
+                        eventReady = true
+                        Log.d("FundraisingMilestoneViewModel", "✅ Event loaded, ready to process animations")
+                    } else {
+                        kotlinx.coroutines.delay(100)
+                        waitAttempts++
+                    }
+                }
+                
+                if (!eventReady) {
+                    Log.w("FundraisingMilestoneViewModel", "⚠️ Event not loaded after waiting, but will continue to observe")
+                }
+                
+                // Queue for events that arrive before event is ready
+                val pendingEvents = mutableListOf<TipAnimationEvent>()
+                
                 pusherService.observeTipAnimation()
                     .catch { e -> 
-                        Log.e("FundraisingMilestoneViewModel", "❌ Error in tip-animation flow", e)
-                        e.printStackTrace()
+                        // Ignore cancellation exceptions - they're expected when switching events
+                        if (e !is kotlinx.coroutines.CancellationException) {
+                            Log.e("FundraisingMilestoneViewModel", "❌ Error in tip-animation flow", e)
+                            e.printStackTrace()
+                        }
                     }
                     .collect { tipAnimationEvent ->
                         Log.d("FundraisingMilestoneViewModel", "🎬 Received tip-animation event in ViewModel")
@@ -246,16 +410,46 @@ class FundraisingMilestoneViewModel @Inject constructor(
                         
                         // Use current event from state (may have been updated)
                         val currentEvent = _uiState.value.event
-                        if (currentEvent != null) {
+                        if (currentEvent != null && currentEvent.characterSets != null) {
                             Log.d("FundraisingMilestoneViewModel", "   - Event found, processing animations...")
                             handleTipAnimationEvent(tipAnimationEvent, currentEvent)
+                            
+                            // Process any pending events that arrived before event was ready
+                            if (pendingEvents.isNotEmpty()) {
+                                Log.d("FundraisingMilestoneViewModel", "   - Processing ${pendingEvents.size} pending animation events")
+                                val eventsToProcess = pendingEvents.toList() // Create a copy to avoid concurrent modification
+                                pendingEvents.clear()
+                                eventsToProcess.forEach { pendingEvent: TipAnimationEvent ->
+                                    handleTipAnimationEvent(pendingEvent, currentEvent)
+                                }
+                            }
                         } else {
-                            Log.w("FundraisingMilestoneViewModel", "⚠️ Event is null, cannot handle tip animation")
+                            Log.w("FundraisingMilestoneViewModel", "⚠️ Event is null or not ready, queuing animation event")
+                            // Queue the event to process later when event is ready
+                            pendingEvents.add(tipAnimationEvent)
+                            
+                            // Try to wait a bit more for event to load
+                            var retryAttempts = 0
+                            while (retryAttempts < 20 && (_uiState.value.event == null || _uiState.value.event?.characterSets == null)) {
+                                kotlinx.coroutines.delay(100)
+                                retryAttempts++
+                            }
+                            
+                            // Try again with current state
+                            val retryEvent = _uiState.value.event
+                            if (retryEvent != null && retryEvent.characterSets != null) {
+                                Log.d("FundraisingMilestoneViewModel", "   - Event loaded after retry, processing queued event")
+                                handleTipAnimationEvent(tipAnimationEvent, retryEvent)
+                                pendingEvents.remove(tipAnimationEvent)
+                            }
                         }
                     }
             } catch (e: Exception) {
-                Log.e("FundraisingMilestoneViewModel", "❌ Error collecting tip-animation", e)
-                e.printStackTrace()
+                // Ignore cancellation exceptions - they're expected when switching events
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    Log.e("FundraisingMilestoneViewModel", "❌ Error collecting tip-animation", e)
+                    e.printStackTrace()
+                }
             }
         }
         flowJobs.add(tipAnimationJob)
@@ -265,14 +459,20 @@ class FundraisingMilestoneViewModel @Inject constructor(
             try {
                 pusherService.observeAmountUpdated()
                     .catch { e -> 
-                        Log.e("FundraisingMilestoneViewModel", "Error in amount-updated flow", e)
+                        // Ignore cancellation exceptions - they're expected when switching events
+                        if (e !is kotlinx.coroutines.CancellationException) {
+                            Log.e("FundraisingMilestoneViewModel", "Error in amount-updated flow", e)
+                        }
                     }
                     .collect { amountUpdated ->
                         Log.d("FundraisingMilestoneViewModel", "Received amount-updated: ${amountUpdated.amountRaised}, ${amountUpdated.numOfTips}")
                         updateAmountRaised(amountUpdated.amountRaised, amountUpdated.numOfTips)
                     }
             } catch (e: Exception) {
-                Log.e("FundraisingMilestoneViewModel", "Error collecting amount-updated", e)
+                // Ignore cancellation exceptions - they're expected when switching events
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    Log.e("FundraisingMilestoneViewModel", "Error collecting amount-updated", e)
+                }
             }
         }
         flowJobs.add(amountUpdatedJob)
@@ -282,14 +482,20 @@ class FundraisingMilestoneViewModel @Inject constructor(
             try {
                 pusherService.observeScreenSettingsUpdated()
                     .catch { e -> 
-                        Log.e("FundraisingMilestoneViewModel", "Error in settings-updated flow", e)
+                        // Ignore cancellation exceptions - they're expected when switching events
+                        if (e !is kotlinx.coroutines.CancellationException) {
+                            Log.e("FundraisingMilestoneViewModel", "Error in settings-updated flow", e)
+                        }
                     }
                     .collect { settingsUpdated ->
                         Log.d("FundraisingMilestoneViewModel", "Received settings-updated event")
                         updateScreenSettings(settingsUpdated)
                     }
             } catch (e: Exception) {
-                Log.e("FundraisingMilestoneViewModel", "Error collecting settings-updated", e)
+                // Ignore cancellation exceptions - they're expected when switching events
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    Log.e("FundraisingMilestoneViewModel", "Error collecting settings-updated", e)
+                }
             }
         }
         flowJobs.add(settingsUpdatedJob)
@@ -299,14 +505,20 @@ class FundraisingMilestoneViewModel @Inject constructor(
             try {
                 pusherService.observeLatestTipUpdated()
                     .catch { e -> 
-                        Log.e("FundraisingMilestoneViewModel", "Error in latest-tip-updated flow", e)
+                        // Ignore cancellation exceptions - they're expected when switching events
+                        if (e !is kotlinx.coroutines.CancellationException) {
+                            Log.e("FundraisingMilestoneViewModel", "Error in latest-tip-updated flow", e)
+                        }
                     }
                     .collect { latestTipUpdated ->
                         Log.d("FundraisingMilestoneViewModel", "Received latest-tip-updated: £${latestTipUpdated.latestTipAmount}")
                         updateLatestTipAmount(latestTipUpdated.latestTipAmount)
                     }
             } catch (e: Exception) {
-                Log.e("FundraisingMilestoneViewModel", "Error collecting latest-tip-updated", e)
+                // Ignore cancellation exceptions - they're expected when switching events
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    Log.e("FundraisingMilestoneViewModel", "Error collecting latest-tip-updated", e)
+                }
             }
         }
         flowJobs.add(latestTipUpdatedJob)
@@ -458,17 +670,98 @@ class FundraisingMilestoneViewModel @Inject constructor(
         Log.d("FundraisingMilestoneViewModel", "✅ Animation removed, new count: ${_uiState.value.pendingAnimations.size}")
     }
     
-    override fun onCleared() {
-        super.onCleared()
-        // Cancel all flow collection jobs
+    /**
+     * Immediately cleans up and clears state when leaving the screen.
+     * Called from the composable's DisposableEffect.
+     * This must be synchronous and immediate - no coroutines.
+     */
+    fun cleanup() {
+        Log.d("FundraisingMilestoneViewModel", "🧹 IMMEDIATE CLEANUP - clearing state and disconnecting")
+        
+        // Immediately clear state - no delay
+        _uiState.value = FundraisingMilestoneUiState(
+            event = null,
+            isLoading = false,
+            error = null,
+            pendingAnimations = emptyList()
+        )
+        
+        // Immediately cancel all flow collection jobs
+        // This will trigger awaitClose in flows, allowing them to clean up properly
         flowJobs.forEach { job ->
-            job.cancel()
+            try {
+                job.cancel()
+            } catch (e: Exception) {
+                Log.e("FundraisingMilestoneViewModel", "Error canceling job during cleanup", e)
+            }
         }
         flowJobs.clear()
         
-        // Disconnect from Pusher (non-suspend cleanup)
-        pusherService.disconnect()
+        // Reset flags BEFORE disconnecting to prevent race conditions
         isPusherInitialized = false
         currentEventId = null
+        
+        // Disconnect from Pusher AFTER canceling jobs (launch coroutine for suspend function)
+        // This ensures flows have a chance to clean up in awaitClose
+        try {
+            viewModelScope.launch {
+                try {
+                    pusherService.disconnect()
+                    Log.d("FundraisingMilestoneViewModel", "✅ Pusher disconnected during cleanup")
+                } catch (e: Exception) {
+                    Log.e("FundraisingMilestoneViewModel", "Error disconnecting Pusher during cleanup", e)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("FundraisingMilestoneViewModel", "Error launching disconnect during cleanup", e)
+        }
+        
+        Log.d("FundraisingMilestoneViewModel", "✅ IMMEDIATE CLEANUP COMPLETE - clean slate ready")
+    }
+    
+    override fun onCleared() {
+        super.onCleared()
+        Log.d("FundraisingMilestoneViewModel", "🧹 [ON_CLEARED] ViewModel onCleared() called")
+        Log.d("FundraisingMilestoneViewModel", "   - Current event ID: $currentEventId")
+        Log.d("FundraisingMilestoneViewModel", "   - Is Pusher initialized: $isPusherInitialized")
+        Log.d("FundraisingMilestoneViewModel", "   - Flow jobs count: ${flowJobs.size}")
+        
+        // Cancel all flow collection jobs
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 1] Cancelling flow collection jobs...")
+        flowJobs.forEachIndexed { index, job ->
+            try {
+                Log.d("FundraisingMilestoneViewModel", "      - Cancelling job $index/${flowJobs.size}")
+                job.cancel()
+                Log.d("FundraisingMilestoneViewModel", "      - ✅ Job $index cancelled")
+            } catch (e: Exception) {
+                Log.e("FundraisingMilestoneViewModel", "      - ❌ Error cancelling job $index", e)
+            }
+        }
+        flowJobs.clear()
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 1] ✅ All flow jobs cancelled and cleared")
+
+        // Disconnect from Pusher (launch coroutine for suspend function)
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 2] Disconnecting from Pusher service...")
+        try {
+            // Launch in viewModelScope to call suspend function
+            viewModelScope.launch {
+                try {
+                    pusherService.disconnect()
+                    Log.d("FundraisingMilestoneViewModel", "   [STEP 2] ✅ Pusher disconnect called")
+                } catch (e: Exception) {
+                    Log.e("FundraisingMilestoneViewModel", "   [STEP 2] ❌ Error calling Pusher disconnect", e)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("FundraisingMilestoneViewModel", "   [STEP 2] ❌ Error launching disconnect", e)
+        }
+        
+        // Reset flags
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 3] Resetting flags...")
+        isPusherInitialized = false
+        currentEventId = null
+        Log.d("FundraisingMilestoneViewModel", "   [STEP 3] ✅ Flags reset")
+        
+        Log.d("FundraisingMilestoneViewModel", "✅ [ON_CLEARED] ViewModel cleanup complete")
     }
 }

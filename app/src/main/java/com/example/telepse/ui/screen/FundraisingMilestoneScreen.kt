@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.*
@@ -65,6 +66,203 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.text.style.TextAlign
 import com.example.telepse.data.model.TipUsageDisclosure
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.yield
+import androidx.compose.runtime.Stable
+import android.content.Context
+
+/**
+ * ExoPlayer Manager with Mutex synchronization to prevent concurrent modifications.
+ * This wrapper ensures thread-safe operations on ExoPlayer instance.
+ */
+@Stable
+internal class ExoPlayerManager(context: Context) {
+    private val mutex = Mutex()
+    private var _player: ExoPlayer? = null
+    private var isReleased = false
+    private var currentUri: Uri? = null
+    
+    val player: ExoPlayer = ExoPlayer.Builder(context)
+        .build()
+        .apply {
+            repeatMode = Player.REPEAT_MODE_ONE
+            _player = this
+        }
+    
+    /**
+     * Thread-safe media update with idempotency check.
+     * Prevents redundant updates and ensures only one update at a time.
+     */
+    suspend fun updateMedia(uri: Uri): Unit {
+        // CRITICAL: Check if released BEFORE acquiring mutex
+        if (isReleased) {
+            android.util.Log.w("ExoPlayerManager", "⚠️ Cannot update - player released (pre-check)")
+            return
+        }
+        
+        mutex.withLock {
+            // CRITICAL: Check for cancellation at the start
+            yield() // Checks for cancellation
+            
+            // Double-check released state after acquiring mutex
+            if (isReleased) {
+                android.util.Log.w("ExoPlayerManager", "⚠️ Cannot update - player released (post-check)")
+                return@withLock
+            }
+            
+            // Skip if same URI (prevents redundant updates)
+            if (currentUri == uri) {
+                android.util.Log.d("ExoPlayerManager", "⏭️ Skipping - same URI already loaded: $uri")
+                return@withLock
+            }
+            
+            _player?.let { exoPlayer ->
+                try {
+                    android.util.Log.d("ExoPlayerManager", "🎬 Updating media (mutex locked): $uri")
+                
+                // Check if player is still valid before any operation
+                try {
+                    val state = exoPlayer.playbackState
+                    android.util.Log.d("ExoPlayerManager", "   - Current player state: $state")
+                } catch (e: IllegalStateException) {
+                    android.util.Log.e("ExoPlayerManager", "❌ Player already released, aborting update")
+                    isReleased = true
+                    currentUri = null
+                    return@withLock
+                }
+                
+                // Check for cancellation before stopping
+                yield() // Checks for cancellation
+                
+                // Stop current playback safely
+                try {
+                    when (exoPlayer.playbackState) {
+                        Player.STATE_IDLE -> {
+                            android.util.Log.d("ExoPlayerManager", "   - Player already idle")
+                        }
+                        Player.STATE_BUFFERING,
+                        Player.STATE_READY,
+                        Player.STATE_ENDED -> {
+                            exoPlayer.stop()
+                            // Clear any pending media items
+                            try {
+                                exoPlayer.clearMediaItems()
+                            } catch (e: Exception) {
+                                android.util.Log.w("ExoPlayerManager", "Could not clear media items", e)
+                            }
+                            android.util.Log.d("ExoPlayerManager", "   - Player stopped and cleared")
+                        }
+                    }
+                } catch (e: IllegalStateException) {
+                    android.util.Log.e("ExoPlayerManager", "Player released during stop", e)
+                    isReleased = true
+                    currentUri = null
+                    return@withLock
+                }
+                
+                // Check for cancellation before setting new media
+                yield() // Checks for cancellation
+                
+                // Set new media with comprehensive error handling
+                try {
+                    val mediaItem = MediaItem.fromUri(uri)
+                    exoPlayer.setMediaItem(mediaItem)
+                    exoPlayer.prepare()
+                    exoPlayer.playWhenReady = true
+                    
+                    currentUri = uri
+                    
+                    android.util.Log.d("ExoPlayerManager", "✅ Media updated successfully to: $uri")
+                } catch (e: IllegalStateException) {
+                    android.util.Log.e("ExoPlayerManager", "❌ IllegalStateException setting media", e)
+                    isReleased = true
+                    currentUri = null
+                    return@withLock
+                }
+                
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    android.util.Log.d("ExoPlayerManager", "⚠️ Update cancelled (event switching)")
+                    // Don't update currentUri - leave it as is for next valid update
+                    throw e // Re-throw to properly cancel
+                } catch (e: IllegalStateException) {
+                    android.util.Log.e("ExoPlayerManager", "❌ IllegalStateException updating media", e)
+                    if (e.message?.contains("released", ignoreCase = true) == true) {
+                        isReleased = true
+                        currentUri = null
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("ExoPlayerManager", "❌ Error updating media", e)
+                }
+            } ?: run {
+                android.util.Log.w("ExoPlayerManager", "⚠️ Player is null")
+                isReleased = true
+            }
+        }
+    }
+    
+    /**
+     * Stop playback safely.
+     */
+    suspend fun stop(): Unit = mutex.withLock {
+        if (isReleased) return@withLock
+        
+        _player?.let { exoPlayer ->
+            try {
+                if (exoPlayer.playbackState != Player.STATE_IDLE) {
+                    exoPlayer.stop()
+                    android.util.Log.d("ExoPlayerManager", "✅ Player stopped")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("ExoPlayerManager", "Error stopping player", e)
+            }
+        }
+    }
+    
+    /**
+     * Reset player state without releasing the instance.
+     * Use when switching events to ensure clean state.
+     */
+    fun reset() {
+        android.util.Log.d("ExoPlayerManager", "🔄 Resetting player state")
+        _player?.let { exoPlayer ->
+            try {
+                if (exoPlayer.playbackState != Player.STATE_IDLE) {
+                    exoPlayer.stop()
+                }
+                exoPlayer.clearMediaItems()
+                android.util.Log.d("ExoPlayerManager", "✅ Player reset (stopped and cleared)")
+            } catch (e: Exception) {
+                android.util.Log.e("ExoPlayerManager", "Error resetting player", e)
+            }
+        }
+        currentUri = null // Clear URI so next event will load
+    }
+    
+    /**
+     * Release player resources.
+     * This is a regular function, not suspend, for DisposableEffect compatibility.
+     */
+    fun release() {
+        android.util.Log.d("ExoPlayerManager", "🗑️ Releasing player")
+        
+        // CRITICAL: Set isReleased FIRST to stop any pending updateMedia calls
+        isReleased = true
+        
+        _player?.let { exoPlayer ->
+            try {
+                exoPlayer.stop()
+                exoPlayer.clearMediaItems()
+                exoPlayer.release()
+                android.util.Log.d("ExoPlayerManager", "✅ Player released")
+            } catch (e: Exception) {
+                android.util.Log.e("ExoPlayerManager", "Error releasing player", e)
+            }
+        }
+        _player = null
+        currentUri = null
+    }
+}
 
 /**
  * Helper function to determine text color based on background type
@@ -104,12 +302,32 @@ fun FundraisingMilestoneScreen(
     
     // Fetch event details
     LaunchedEffect(eventId) {
+        android.util.Log.d("FundraisingMilestoneScreen", "📥 [LOAD] Loading event: $eventId")
         viewModel.loadEvent(eventId)
     }
     
     val event = uiState.event
     
-    if (event != null) {
+    // CRITICAL: Only render if event matches eventId to prevent stale data during transitions
+    // If event data doesn't match eventId, treat it as loading state
+    if (event != null && event.id == eventId) {
+        // Create ExoPlayerManager ONLY when we have the correct event data
+        // This prevents creating a player manager when UI state is null/mismatched
+        val playerManager = remember(eventId) {
+            android.util.Log.d("FundraisingMilestoneScreen", "🎬 Creating ExoPlayerManager for event: $eventId")
+            ExoPlayerManager(context)
+        }
+        
+        // Release ExoPlayerManager when eventId changes or screen leaves
+        DisposableEffect(eventId) {
+            android.util.Log.d("FundraisingMilestoneScreen", "🔧 [SCREEN] Event entered: $eventId")
+            
+            onDispose {
+                android.util.Log.d("FundraisingMilestoneScreen", "🧹 [SCREEN] Event leaving: $eventId - releasing ExoPlayerManager")
+                playerManager.release()
+                android.util.Log.d("FundraisingMilestoneScreen", "✅ ExoPlayerManager released for event: $eventId")
+            }
+        }
         // Get background resource based on event background type
         val backgroundResourceId = getEventBackgroundResource(
             backgroundType = event.backgroundType,
@@ -129,11 +347,17 @@ fun FundraisingMilestoneScreen(
                     .zIndex(2000f) // Above everything
             )
             
-            // Video Background
-            VideoBackground(
-                uri = backgroundUri,
-                modifier = Modifier.fillMaxSize()
-            )
+            // Video Background - pass playerManager for synchronized operations
+            // CRITICAL: Use key() to ensure VideoBackground is completely recreated per event
+            // This cancels any pending LaunchedEffects from previous events
+            key(eventId) {
+                VideoBackground(
+                    uri = backgroundUri,
+                    resourceId = backgroundResourceId,
+                    playerManager = playerManager,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
             
             // Content Overlay - Full height container
             Box(
@@ -257,7 +481,7 @@ fun FundraisingMilestoneScreen(
                             amountRaised = amountRaised,
                             amountToRaise = event.amountToRaise?.toInt() ?: 0,
                             textColor = textColor,
-                            hideAmountText = event.hideProgressBarAmount == true,
+                            hideAmountText = event.hideProgressBarAmount != true, // Reversed: backend has logic inverted
                             shouldGlow = shouldGlow,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -341,28 +565,44 @@ fun FundraisingMilestoneScreen(
                 }
             )
         }
-    } else if (uiState.isLoading) {
-        // Loading state
+    } else if (uiState.isLoading || (event != null && event.id != eventId)) {
+        // Loading state OR event data mismatch (switching events)
+        // Show loading screen instead of rendering mismatched data
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black), // Add black background for stability
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = "Loading...",
-                color = Color.Black,
-                fontSize = 18.sp
-            )
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                CircularProgressIndicator(color = Color.White)
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = if (event != null && event.id != eventId) {
+                        "Switching events..."
+                    } else {
+                        "Loading..."
+                    },
+                    color = Color.White,
+                    fontSize = 18.sp
+                )
+            }
         }
     } else {
         // Error state
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black), // Add black background
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = uiState.error ?: "Failed to load event",
-                    color = Color.Black,
+                    color = Color.White, // Changed to white for visibility on black background
                     fontSize = 18.sp
                 )
                 Spacer(modifier = Modifier.height(16.dp))
@@ -379,37 +619,80 @@ fun FundraisingMilestoneScreen(
 }
 
 @Composable
-fun VideoBackground(
+private fun VideoBackground(
     uri: Uri,
+    resourceId: Int,
+    playerManager: ExoPlayerManager,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val exoPlayer = remember {
-        ExoPlayer.Builder(context).build().apply {
-            repeatMode = Player.REPEAT_MODE_ONE
+    // Create a stable key that includes both resourceId and uri for proper cancellation
+    val backgroundKey = remember(uri, resourceId) { 
+        "${resourceId}_${uri.toString()}"
+    }
+    
+    android.util.Log.d("VideoBackground", "🔧 VideoBackground composable entered")
+    android.util.Log.d("VideoBackground", "   - Resource ID: $resourceId")
+    android.util.Log.d("VideoBackground", "   - URI: $uri")
+    android.util.Log.d("VideoBackground", "   - Background Key: $backgroundKey")
+    
+    // Update media when URI changes - playerManager handles synchronization
+    // Using backgroundKey ensures LaunchedEffect cancels when event changes
+    LaunchedEffect(backgroundKey) {
+        try {
+            android.util.Log.d("VideoBackground", "🔄 LaunchedEffect triggered")
+            android.util.Log.d("VideoBackground", "   - Key: $backgroundKey")
+            android.util.Log.d("VideoBackground", "   - URI: $uri")
+            
+            // Small delay to allow previous LaunchedEffect to cancel
+            kotlinx.coroutines.delay(50)
+            
+            // Check if still active after delay
+            yield() // Checks for cancellation
+            
+            // CRITICAL: updateMedia is synchronized with mutex
+            // Only one update can happen at a time, preventing race conditions
+            playerManager.updateMedia(uri)
+            
+            android.util.Log.d("VideoBackground", "✅ Video background update complete")
+            
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Cancellation is expected when switching events
+            android.util.Log.d("VideoBackground", "⚠️ Video update cancelled (switching events)")
+            throw e // Re-throw to properly cancel the coroutine
+        } catch (e: Exception) {
+            android.util.Log.e("VideoBackground", "❌ Error in LaunchedEffect", e)
         }
     }
     
-    // Update media item when URI changes
-    LaunchedEffect(uri) {
-        val mediaItem = MediaItem.fromUri(uri)
-        exoPlayer.setMediaItem(mediaItem)
-        exoPlayer.prepare()
-        exoPlayer.playWhenReady = true
-    }
-    
-    DisposableEffect(Unit) {
-        onDispose {
-            exoPlayer.release()
-        }
-    }
+    // NO cleanup in VideoBackground - player is managed at screen level
+    // This prevents race conditions when switching events
     
     AndroidView(
         factory = { ctx ->
-            PlayerView(ctx).apply {
-                player = exoPlayer
-                useController = false
-                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            try {
+                android.util.Log.d("VideoBackground", "🏭 Creating PlayerView")
+                PlayerView(ctx).apply {
+                    player = playerManager.player
+                    useController = false
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("VideoBackground", "❌ Error creating PlayerView", e)
+                // Return a fallback view if PlayerView creation fails
+                android.view.View(ctx)
+            }
+        },
+        update = { view ->
+            // Update player reference if view is PlayerView
+            if (view is PlayerView) {
+                try {
+                    if (view.player != playerManager.player) {
+                        view.player = playerManager.player
+                        android.util.Log.d("VideoBackground", "🔄 PlayerView player reference updated")
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("VideoBackground", "Error updating PlayerView player", e)
+                }
             }
         },
         modifier = modifier
@@ -505,7 +788,7 @@ fun ProgressBarSection(
         // All three on the same row, with target aligned to be beneath the icon
         // Hide this row when hideAmountText is true
         if (!hideAmountText) {
-            // Use wider width to accommodate larger target amounts without breaking
+            // Match the exact width of progress bar (320.dp) + spacing (16.dp) + icon (36.dp) = 372.dp
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -513,12 +796,12 @@ fun ProgressBarSection(
             ) {
                 Row(
                     modifier = Modifier
-                        .widthIn(min = 292.dp, max = 400.dp) // Allow expansion for larger numbers
+                        .width(372.dp) // Match progress bar + spacing + icon width
                         .align(Alignment.Center),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Left: Amount Raised
+                    // Left: Amount Raised (aligned with start of progress bar)
                     Text(
                         text = "£$amountRaised",
                         fontSize = 12.sp,
@@ -538,7 +821,7 @@ fun ProgressBarSection(
                         maxLines = 1
                     )
                     
-                    // Right: Target Price (aligned to be beneath the icon, but on same row)
+                    // Right: Target Price (aligned to be beneath the icon)
                     Text(
                         text = "£$amountToRaise",
                         fontSize = 12.sp,

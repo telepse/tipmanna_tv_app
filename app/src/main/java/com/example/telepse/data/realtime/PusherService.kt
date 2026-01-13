@@ -24,6 +24,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -49,6 +51,16 @@ class PusherService @Inject constructor() {
         encodeDefaults = false
     }
     
+    // CRITICAL: Track if Pusher instance is corrupted and needs recreation
+    private var isPusherCorrupted = false
+    
+    // CRITICAL: Track if we're disconnecting to prevent listener callbacks from processing
+    @Volatile
+    private var isDisconnecting = false
+    
+    // Mutex to prevent concurrent modifications to Pusher state
+    private val pusherMutex = Mutex()
+    
     /**
      * Initializes and connects to Pusher.
      * Should be called before subscribing to channels.
@@ -56,27 +68,52 @@ class PusherService @Inject constructor() {
      * @param forceReconnect If true, disconnects existing connection before reinitializing
      * @return true if initialization was successful, false otherwise
      */
-    fun initialize(forceReconnect: Boolean = false): Boolean {
+    suspend fun initialize(forceReconnect: Boolean = false): Boolean {
+        // Brief check if disconnect is in progress
+        var waitAttempts = 0
+        while (isDisconnecting && waitAttempts < 10) {  // Max 1 second (should be very quick now)
+            Log.d("PusherService", "⏳ Waiting for disconnect flag reset (attempt $waitAttempts)")
+            delay(100)
+            waitAttempts++
+        }
+        
+        if (isDisconnecting) {
+            Log.e("PusherService", "❌ Disconnect flag still true after waiting - aborting initialize")
+            return false
+        }
+        
+        return pusherMutex.withLock {
+        // CRITICAL: If Pusher instance is corrupted, force complete recreation
+        if (isPusherCorrupted) {
+            Log.w("PusherService", "⚠️ Pusher instance corrupted - forcing complete recreation")
+            forceDestroy()
+            isPusherCorrupted = false
+        }
+        
         // If already initialized and not forcing reconnect, return true
         if (pusher != null && !forceReconnect) {
             // Check if pusher is still connected
             val state = pusher?.connection?.state
             if (state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING) {
                 Log.d("PusherService", "Pusher already initialized and connected")
-                return true
+                return@withLock true
             } else {
                 Log.d("PusherService", "Pusher exists but not connected (state: $state), reinitializing...")
-                disconnect()
+                forceDestroy()
             }
         }
         
         // If forcing reconnect, disconnect first
         if (forceReconnect && pusher != null) {
             Log.d("PusherService", "Force reconnecting Pusher...")
-            disconnect()
+            forceDestroy()
         }
         
-        return try {
+        try {
+            // Disconnecting flag should already be false, but ensure it
+            isDisconnecting = false
+            Log.d("PusherService", "   - Confirmed isDisconnecting = false")
+            
             val options = PusherOptions()
             options.setCluster(PusherConfig.CLUSTER)
             
@@ -122,6 +159,12 @@ class PusherService @Inject constructor() {
             pusher = Pusher(PusherConfig.API_KEY, options)
             pusher?.connect(object : ConnectionEventListener {
                 override fun onConnectionStateChange(change: ConnectionStateChange) {
+                    // CRITICAL: Don't process callbacks if we're disconnecting
+                    if (isDisconnecting) {
+                        Log.d("PusherService", "⏭️ Skipping connection state callback - disconnecting in progress")
+                        return
+                    }
+                    
                     // Log connection state changes for debugging
                     Log.d("PusherService", "🔌 Connection state changed: ${change.previousState} -> ${change.currentState}")
                     when (change.currentState) {
@@ -162,6 +205,7 @@ class PusherService @Inject constructor() {
             Log.e("PusherService", "Failed to initialize Pusher", e)
             false
         }
+        } // End of pusherMutex.withLock
     }
     
     /**
@@ -170,8 +214,13 @@ class PusherService @Inject constructor() {
      * @param channelName Name of the channel (e.g., "event-{eventId}")
      * @return true if subscription was successful, false otherwise
      */
-    fun subscribeToPublicChannel(channelName: String): Boolean {
+    suspend fun subscribeToPublicChannel(channelName: String): Boolean = pusherMutex.withLock {
         return try {
+            if (isPusherCorrupted) {
+                Log.e("PusherService", "❌ Cannot subscribe - Pusher instance corrupted")
+                return false
+            }
+            
             pusher?.let { pusherInstance ->
                 // Unsubscribe from previous public channel if exists and it's a different channel
                 publicChannel?.let { channel ->
@@ -185,15 +234,25 @@ class PusherService @Inject constructor() {
                         publicChannel = null
                     }
                 }
-                publicChannel = pusherInstance.subscribe(channelName)
-                Log.d("PusherService", "✅ Subscribed to public channel: $channelName")
-                true
+                
+                try {
+                    publicChannel = pusherInstance.subscribe(channelName)
+                    Log.d("PusherService", "✅ Subscribed to public channel: $channelName")
+                    true
+                } catch (e: IllegalArgumentException) {
+                    Log.e("PusherService", "❌ IllegalArgumentException - Pusher instance corrupted", e)
+                    isPusherCorrupted = true
+                    false
+                } catch (e: Exception) {
+                    Log.e("PusherService", "Failed to subscribe to channel: $channelName", e)
+                    false
+                }
             } ?: run {
                 Log.e("PusherService", "Pusher not initialized. Call initialize() first.")
                 false
             }
         } catch (e: Exception) {
-            Log.e("PusherService", "Failed to subscribe to channel: $channelName", e)
+            Log.e("PusherService", "Critical error in subscribeToPublicChannel", e)
             false
         }
     }
@@ -205,8 +264,13 @@ class PusherService @Inject constructor() {
      * @param channelName Name of the private channel (e.g., "private-event-{eventId}")
      * @return true if subscription was successful, false otherwise
      */
-    fun subscribeToPrivateChannel(channelName: String): Boolean {
+    suspend fun subscribeToPrivateChannel(channelName: String): Boolean = pusherMutex.withLock {
         return try {
+            if (isPusherCorrupted) {
+                Log.e("PusherService", "❌ Cannot subscribe - Pusher instance corrupted")
+                return false
+            }
+            
             pusher?.let { pusherInstance ->
                 // Unsubscribe from previous private channel if exists and it's a different channel
                 privateChannel?.let { channel ->
@@ -220,26 +284,32 @@ class PusherService @Inject constructor() {
                         privateChannel = null
                     }
                 }
-                // IMPORTANT: Use subscribePrivate for private channels
-                privateChannel = pusherInstance.subscribePrivate(channelName)
                 
-                // Set up subscription event listeners
-                privateChannel?.bind("pusher:subscription_succeeded") { event ->
-                    Log.d("PusherService", "✅ Private channel subscription succeeded: $channelName")
-                    Log.d("PusherService", "   - Event data: ${event.data}")
-                }
-                
-                privateChannel?.bind("pusher:subscription_error") { event ->
-                    Log.e("PusherService", "❌ Private channel subscription error: $channelName")
-                    Log.e("PusherService", "   - Event data: ${event.data}")
-                    Log.e("PusherService", "   - Event name: ${event.eventName}")
-                }
-                
-                // Log all events received from private channel for debugging
-                privateChannel?.bindGlobal { event ->
-                    Log.d("PusherService", "📨 Event received on private channel $channelName:")
-                    Log.d("PusherService", "   - Event name: ${event.eventName}")
-                    Log.d("PusherService", "   - Event data: ${event.data}")
+                try {
+                    // IMPORTANT: Use subscribePrivate for private channels
+                    // THIS IS THE CRITICAL POINT where IllegalArgumentException may occur
+                    privateChannel = pusherInstance.subscribePrivate(channelName)
+                    
+                    // NOTE: Do NOT manually bind pusher:subscription_succeeded and pusher:subscription_error
+                    // These are internal events that the Pusher client handles automatically
+                    // Binding them manually causes IllegalArgumentException
+                    
+                    Log.d("PusherService", "   - Private channel object created: $channelName")
+                    Log.d("PusherService", "   - Waiting for Pusher to complete subscription...")
+                    
+                    // Give Pusher time to complete the subscription handshake
+                    // The authorization happens asynchronously
+                    
+                } catch (e: IllegalArgumentException) {
+                    // CRITICAL: IllegalArgumentException indicates Pusher instance is corrupted
+                    Log.e("PusherService", "❌❌❌ IllegalArgumentException - PUSHER INSTANCE CORRUPTED", e)
+                    Log.e("PusherService", "   Message: ${e.message}")
+                    Log.e("PusherService", "   Channel: $channelName")
+                    isPusherCorrupted = true
+                    return false
+                } catch (e: Exception) {
+                    Log.e("PusherService", "❌ Unexpected error during private channel subscription", e)
+                    return false
                 }
                 
                 Log.d("PusherService", "✅ Subscribed to private channel: $channelName")
@@ -255,29 +325,127 @@ class PusherService @Inject constructor() {
     }
     
     /**
+     * Complete instance destruction for corrupted state recovery.
+     * Use when Pusher instance needs to be completely recreated.
+     */
+    private fun forceDestroy() {
+        try {
+            Log.d("PusherService", "💥 Force destroying Pusher instance")
+            
+            // Clear channel references
+            publicChannel = null
+            privateChannel = null
+            
+            // Don't call disconnect() - just null out the instance
+            // Garbage collection will handle cleanup
+            Log.d("PusherService", "   - Skipping disconnect(), nulling out instance for GC")
+            pusher = null
+            isPusherCorrupted = false
+            
+            Log.d("PusherService", "✅ Force destroy complete - clean slate")
+        } catch (e: Exception) {
+            Log.e("PusherService", "❌ Error in force destroy", e)
+        }
+    }
+    
+    /**
+     * Resets the disconnecting flag. Called after disconnect has completed its async operations.
+     * This allows the next initialize() call to proceed.
+     */
+    fun resetDisconnectingFlag() {
+        Log.d("PusherService", "🔓 Resetting isDisconnecting flag to false")
+        isDisconnecting = false
+    }
+    
+    /**
      * Unsubscribes from all channels and disconnects.
      */
-    fun disconnect() {
-        pusher?.let { pusherInstance ->
-            publicChannel?.let { channel ->
-                try {
-                    pusherInstance.unsubscribe(channel.name)
-                } catch (e: Exception) {
-                    Log.w("PusherService", "Error unsubscribing from public channel", e)
+    suspend fun disconnect() {
+        Log.d("PusherService", "🔌 [DISCONNECT] Starting Pusher disconnect")
+        
+        // CRITICAL: Set flag FIRST to prevent connection listener callbacks
+        isDisconnecting = true
+        Log.d("PusherService", "   - Set isDisconnecting = true")
+        
+        // Store pusher reference before entering mutex
+        val pusherInstance = pusher
+        
+        pusherMutex.withLock {
+            Log.d("PusherService", "   - Public channel: ${publicChannel?.name ?: "null"}")
+            Log.d("PusherService", "   - Private channel: ${privateChannel?.name ?: "null"}")
+            Log.d("PusherService", "   - Pusher instance: ${if (pusher != null) "exists" else "null"}")
+        
+        try {
+            // Store channel references before clearing
+            Log.d("PusherService", "   [STEP 1] Storing channel references...")
+            val pubChannel = publicChannel
+            val privChannel = privateChannel
+            val pusherInstance = pusher
+            Log.d("PusherService", "   [STEP 1] ✅ References stored")
+            
+            // Clear channel references FIRST to prevent flows from accessing them
+            Log.d("PusherService", "   [STEP 2] Clearing channel references...")
+            publicChannel = null
+            privateChannel = null
+            Log.d("PusherService", "   [STEP 2] ✅ Channel references cleared")
+            
+            pusherInstance?.let {
+                Log.d("PusherService", "   [STEP 3] Unsubscribing from channels...")
+                
+                // Unsubscribe from channels (using stored references)
+                pubChannel?.let { channel ->
+                    try {
+                        Log.d("PusherService", "      - Unsubscribing from public channel: ${channel.name}")
+                        it.unsubscribe(channel.name)
+                        Log.d("PusherService", "      - ✅ Unsubscribed from public channel: ${channel.name}")
+                    } catch (e: Exception) {
+                        Log.w("PusherService", "      - ❌ Error unsubscribing from public channel", e)
+                    }
+                } ?: run {
+                    Log.d("PusherService", "      - ⚠️ No public channel to unsubscribe")
                 }
-            }
-            privateChannel?.let { channel ->
-                try {
-                    pusherInstance.unsubscribe(channel.name)
-                } catch (e: Exception) {
-                    Log.w("PusherService", "Error unsubscribing from private channel", e)
+                
+                privChannel?.let { channel ->
+                    try {
+                        Log.d("PusherService", "      - Unsubscribing from private channel: ${channel.name}")
+                        it.unsubscribe(channel.name)
+                        Log.d("PusherService", "      - ✅ Unsubscribed from private channel: ${channel.name}")
+                    } catch (e: Exception) {
+                        Log.w("PusherService", "      - ❌ Error unsubscribing from private channel", e)
+                    }
+                } ?: run {
+                    Log.d("PusherService", "      - ⚠️ No private channel to unsubscribe")
                 }
+                
+                Log.d("PusherService", "   [STEP 3] ✅ Channel unsubscription complete")
+                
+                // DON'T call disconnect() - it triggers Pusher's internal cleanup threads which can crash
+                // Instead, just unsubscribe (already done above) and null out the reference (done in finally)
+                // Garbage collection will handle cleanup
+                Log.d("PusherService", "   [STEP 4] Skipping pusher.disconnect() to avoid internal thread crashes")
+                Log.d("PusherService", "   [STEP 4] ✅ Will rely on garbage collection for cleanup")
+            } ?: run {
+                Log.d("PusherService", "   [STEP 3] ⚠️ No Pusher instance to disconnect")
             }
+        } catch (e: Exception) {
+            Log.e("PusherService", "❌ [DISCONNECT] Error during disconnect", e)
+        } finally {
+            // Ensure all references are cleared
+            Log.d("PusherService", "   [STEP 5] Final cleanup - clearing all references...")
+            publicChannel = null
+            privateChannel = null
+            
+            // CRITICAL: Always null out the Pusher instance to force fresh creation on next initialize
+            // This prevents issues with trying to reuse a Pusher instance that's still disconnecting
+            Log.d("PusherService", "   - Nulling out Pusher instance for fresh creation on next initialize")
+            pusher = null
+            isPusherCorrupted = false // Reset corruption flag
+            
+            Log.d("PusherService", "   [STEP 5] ✅ All references cleared")
         }
-        publicChannel = null
-        privateChannel = null
-        pusher?.disconnect()
-        pusher = null
+        } // End of pusherMutex.withLock
+        
+        Log.d("PusherService", "✅ [DISCONNECT] Pusher disconnect complete (async disconnection continuing in background)")
     }
     
     /**
@@ -307,6 +475,11 @@ class PusherService @Inject constructor() {
         val subscription = object : SubscriptionEventListener {
             override fun onEvent(event: PusherEvent) {
                 try {
+                    // Check if channel is still valid before processing
+                    if (publicChannel == null) {
+                        Log.d("PusherService", "⚠️ Public channel is null, ignoring tip-animation event")
+                        return
+                    }
                     Log.d("PusherService", "🔔 Received tip-animation event")
                     Log.d("PusherService", "Raw event data: ${event.data}")
                     Log.d("PusherService", "Event name: ${event.eventName}")
@@ -337,6 +510,9 @@ class PusherService @Inject constructor() {
                     } else {
                         Log.e("PusherService", "❌ Failed to send tip-animation to flow: ${sent.exceptionOrNull()}")
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // Cancellation is expected when disconnecting - don't log as error
+                    throw e
                 } catch (e: Exception) {
                     // Log error but don't crash
                     Log.e("PusherService", "❌ Error parsing tip-animation event", e)
@@ -352,7 +528,18 @@ class PusherService @Inject constructor() {
         Log.d("PusherService", "✅ Bound to tip-animation event - ready to receive events")
         
         awaitClose {
-            finalChannel.unbind("tip-animation", subscription)
+            try {
+                // Only unbind if channel still exists and is valid
+                val currentChannel = publicChannel
+                if (finalChannel != null && currentChannel != null && finalChannel == currentChannel) {
+                    finalChannel.unbind("tip-animation", subscription)
+                    Log.d("PusherService", "✅ Unbound tip-animation listener")
+                } else {
+                    Log.d("PusherService", "⚠️ Skipping tip-animation unbind - channel already disposed")
+                }
+            } catch (e: Exception) {
+                Log.w("PusherService", "Error unbinding tip-animation listener", e)
+            }
         }
     }
     
@@ -383,10 +570,18 @@ class PusherService @Inject constructor() {
         val subscription = object : SubscriptionEventListener {
             override fun onEvent(event: PusherEvent) {
                 try {
+                    // Check if channel is still valid before processing
+                    if (publicChannel == null) {
+                        Log.d("PusherService", "⚠️ Public channel is null, ignoring amount-updated event")
+                        return
+                    }
                     Log.d("PusherService", "🔔 Received event-amount-updated: ${event.data}")
                     val amountUpdated = json.decodeFromString<AmountUpdatedEvent>(event.data)
                     Log.d("PusherService", "✅ Parsed amount-updated: £${amountUpdated.amountRaised}, ${amountUpdated.numOfTips} tips")
                     trySend(amountUpdated)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // Cancellation is expected when disconnecting - don't log as error
+                    throw e
                 } catch (e: Exception) {
                     Log.e("PusherService", "❌ Error parsing amount-updated event", e)
                     e.printStackTrace()
@@ -398,7 +593,18 @@ class PusherService @Inject constructor() {
         Log.d("PusherService", "✅ Bound to event-amount-updated event - ready to receive events")
         
         awaitClose {
-            finalChannel.unbind("event-amount-updated", subscription)
+            try {
+                // Only unbind if channel still exists and is valid
+                val currentChannel = publicChannel
+                if (finalChannel != null && currentChannel != null && finalChannel == currentChannel) {
+                    finalChannel.unbind("event-amount-updated", subscription)
+                    Log.d("PusherService", "✅ Unbound event-amount-updated listener")
+                } else {
+                    Log.d("PusherService", "⚠️ Skipping event-amount-updated unbind - channel already disposed")
+                }
+            } catch (e: Exception) {
+                Log.w("PusherService", "Error unbinding event-amount-updated listener", e)
+            }
         }
     }
     
@@ -429,6 +635,11 @@ class PusherService @Inject constructor() {
         val subscription = object : PrivateChannelEventListener {
             override fun onEvent(event: PusherEvent) {
                 try {
+                    // Check if channel is still valid before processing
+                    if (privateChannel == null) {
+                        Log.d("PusherService", "⚠️ Private channel is null, ignoring event")
+                        return
+                    }
                     Log.d("PusherService", "🔔 Received screen-settings-updated event from private channel")
                     Log.d("PusherService", "   - Event name: ${event.eventName}")
                     Log.d("PusherService", "   - Raw event data: ${event.data}")
@@ -440,6 +651,9 @@ class PusherService @Inject constructor() {
                     Log.d("PusherService", "   - showLatestAmount: ${settingsUpdated.showLatestAmount}")
                     Log.d("PusherService", "   - moneyFor: ${settingsUpdated.moneyFor}")
                     trySend(settingsUpdated)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // Cancellation is expected when disconnecting - don't log as error
+                    throw e
                 } catch (e: Exception) {
                     Log.e("PusherService", "❌ Error parsing settings-updated event", e)
                     Log.e("PusherService", "   - Raw data that failed: ${event.data}")
@@ -460,7 +674,18 @@ class PusherService @Inject constructor() {
         Log.d("PusherService", "✅ Bound to screen-settings-updated event on private channel - ready to receive events")
         
         awaitClose {
-            finalChannel.unbind("screen-settings-updated", subscription)
+            try {
+                // Only unbind if channel still exists and is valid
+                val currentChannel = privateChannel
+                if (finalChannel != null && currentChannel != null && finalChannel == currentChannel) {
+                    finalChannel.unbind("screen-settings-updated", subscription)
+                    Log.d("PusherService", "✅ Unbound screen-settings-updated listener")
+                } else {
+                    Log.d("PusherService", "⚠️ Skipping screen-settings-updated unbind - channel already disposed")
+                }
+            } catch (e: Exception) {
+                Log.w("PusherService", "Error unbinding screen-settings-updated listener", e)
+            }
         }
     }
     
@@ -494,10 +719,18 @@ class PusherService @Inject constructor() {
         val subscription = object : SubscriptionEventListener {
             override fun onEvent(event: PusherEvent) {
                 try {
+                    // Check if channel is still valid before processing
+                    if (publicChannel == null) {
+                        Log.d("PusherService", "⚠️ Public channel is null, ignoring latest-tip-updated event")
+                        return
+                    }
                     Log.d("PusherService", "🔔 Received latest-tip-updated: ${event.data}")
                     val latestTipUpdated = json.decodeFromString<LatestTipUpdatedEvent>(event.data)
                     Log.d("PusherService", "✅ Parsed latest-tip-updated: £${latestTipUpdated.latestTipAmount}")
                     trySend(latestTipUpdated)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // Cancellation is expected when disconnecting - don't log as error
+                    throw e
                 } catch (e: Exception) {
                     Log.e("PusherService", "❌ Error parsing latest-tip-updated event", e)
                     e.printStackTrace()
@@ -509,8 +742,18 @@ class PusherService @Inject constructor() {
         Log.d("PusherService", "✅ Bound to latest-tip-updated event - ready to receive events")
         
         awaitClose {
-            finalChannel.unbind("latest-tip-updated", subscription)
+            try {
+                // Only unbind if channel still exists and is valid
+                val currentChannel = publicChannel
+                if (finalChannel != null && currentChannel != null && finalChannel == currentChannel) {
+                    finalChannel.unbind("latest-tip-updated", subscription)
+                    Log.d("PusherService", "✅ Unbound latest-tip-updated listener")
+                } else {
+                    Log.d("PusherService", "⚠️ Skipping latest-tip-updated unbind - channel already disposed")
+                }
+            } catch (e: Exception) {
+                Log.w("PusherService", "Error unbinding latest-tip-updated listener", e)
+            }
         }
     }
 }
-
