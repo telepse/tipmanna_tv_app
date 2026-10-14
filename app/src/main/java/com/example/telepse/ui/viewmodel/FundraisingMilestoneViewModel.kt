@@ -7,7 +7,9 @@ import com.example.telepse.data.model.Event
 import com.example.telepse.data.model.TipAnimationEvent
 import com.example.telepse.data.network.NetworkMonitor
 import com.example.telepse.data.realtime.PusherService
+import com.example.telepse.data.repository.AnimationContractRepository
 import com.example.telepse.data.repository.EventRepository
+import com.example.telepse.player.TipAnimationGuard
 import com.example.telepse.ui.animations.AnimationType
 import com.example.telepse.ui.animations.AnimationTypeMapper
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -47,8 +49,11 @@ data class FundraisingMilestoneUiState(
 class FundraisingMilestoneViewModel @Inject constructor(
     private val eventRepository: EventRepository,
     private val pusherService: PusherService,
-    private val networkMonitor: NetworkMonitor
+    private val networkMonitor: NetworkMonitor,
+    private val animationContractRepository: AnimationContractRepository,
 ) : ViewModel() {
+    
+    private val tipAnimationGuard = TipAnimationGuard(AnimationContractRepository.DEFAULT_STALE_MS)
     
     private val _uiState = MutableStateFlow(FundraisingMilestoneUiState())
     val uiState: StateFlow<FundraisingMilestoneUiState> = _uiState.asStateFlow()
@@ -325,38 +330,45 @@ class FundraisingMilestoneViewModel @Inject constructor(
         
         isPusherInitialized = true
         currentEventId = eventId
+        tipAnimationGuard.reset()
+        pusherService.setEventCodeForAuth(event.eventCode)
         
         viewModelScope.launch {
             try {
-                // Initialize Pusher first - force reconnect if switching events
+                val staleMs = animationContractRepository.fetchStaleThresholdMs()
+                tipAnimationGuard.updateStaleThresholdMs(staleMs)
+                Log.d("FundraisingMilestoneViewModel", "Animation guard staleThresholdMs=$staleMs")
+
                 val forceReconnect = isPusherInitialized && currentEventId != eventId
                 if (!pusherService.initialize(forceReconnect = forceReconnect)) {
                     Log.e("FundraisingMilestoneViewModel", "Failed to initialize Pusher")
                     return@launch
                 }
                 
-                // Wait a bit for connection to establish
                 kotlinx.coroutines.delay(500)
                 
-                // Subscribe to public channel (for animations, amount updates, latest tip)
                 val publicChannelName = "event-$eventId"
                 if (!pusherService.subscribeToPublicChannel(publicChannelName)) {
                     Log.e("FundraisingMilestoneViewModel", "Failed to subscribe to public channel: $publicChannelName")
                     return@launch
                 }
+
+                if (!pusherService.subscribeToGlobalLiveTv()) {
+                    Log.e("FundraisingMilestoneViewModel", "Failed to subscribe to global-live-tv")
+                    return@launch
+                }
                 
-                // Subscribe to private channel (for screen settings)
                 val privateChannelName = "private-event-$eventId"
                 if (!pusherService.subscribeToPrivateChannel(privateChannelName)) {
                     Log.e("FundraisingMilestoneViewModel", "Failed to subscribe to private channel: $privateChannelName")
                     return@launch
                 }
                 
-                // Wait a bit for channel subscriptions to be ready
                 kotlinx.coroutines.delay(500)
                 
                 Log.d("FundraisingMilestoneViewModel", "✅ Pusher initialized and subscribed to:")
                 Log.d("FundraisingMilestoneViewModel", "   - Public channel: $publicChannelName")
+                Log.d("FundraisingMilestoneViewModel", "   - global-live-tv (tip-animation)")
                 Log.d("FundraisingMilestoneViewModel", "   - Private channel: $privateChannelName")
                 
                 // Log that we're about to start observing
@@ -403,12 +415,19 @@ class FundraisingMilestoneViewModel @Inject constructor(
                         }
                     }
                     .collect { tipAnimationEvent ->
-                        Log.d("FundraisingMilestoneViewModel", "🎬 Received tip-animation event in ViewModel")
+                        val activeId = currentEventId ?: return@collect
+                        if (!tipAnimationGuard.shouldAccept(tipAnimationEvent, activeId)) {
+                            Log.d(
+                                "FundraisingMilestoneViewModel",
+                                "tip-animation rejected by guard (eventId=${tipAnimationEvent.eventId})",
+                            )
+                            return@collect
+                        }
+                        Log.d("FundraisingMilestoneViewModel", "🎬 Accepted tip-animation for event $activeId")
                         Log.d("FundraisingMilestoneViewModel", "   - Tips count: ${tipAnimationEvent.selectedTips.size}")
                         Log.d("FundraisingMilestoneViewModel", "   - Amount: ${tipAnimationEvent.amount}")
                         Log.d("FundraisingMilestoneViewModel", "   - Sender: ${tipAnimationEvent.sender}")
                         
-                        // Use current event from state (may have been updated)
                         val currentEvent = _uiState.value.event
                         if (currentEvent != null && currentEvent.characterSets != null) {
                             Log.d("FundraisingMilestoneViewModel", "   - Event found, processing animations...")

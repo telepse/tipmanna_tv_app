@@ -1,10 +1,13 @@
 package com.example.telepse.data.repository
 
 import com.example.telepse.data.model.Event
+import com.example.telepse.data.network.parseEventsByCodeResponseBody
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
+import com.example.telepse.data.network.ApiConfig
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -13,22 +16,18 @@ class EventRepository @Inject constructor(
     private val httpClient: HttpClient
 ) {
     
-    companion object {
-        private const val BASE_URL = "https://tipmanna.onrender.com"
-    }
-    
     /**
      * Fetches events by event code from the API
      */
     suspend fun getEventsByCode(eventCode: String): Result<List<Event>> {
         return try {
-            val response = httpClient.get("$BASE_URL/api/v1/events/code/$eventCode") {
+            val response = httpClient.get("${ApiConfig.BASE_URL}/api/v1/events/code/$eventCode") {
                 // Add any headers if needed
             }
             
             when (response.status) {
                 HttpStatusCode.OK -> {
-                    val events: List<Event> = response.body()
+                    val events = parseEventsByCodeResponseBody(response.bodyAsText())
                     Result.success(events)
                 }
                 HttpStatusCode.NotFound -> {
@@ -48,7 +47,7 @@ class EventRepository @Inject constructor(
      */
     suspend fun getEventById(eventId: String): Result<Event> {
         return try {
-            val response = httpClient.get("$BASE_URL/api/v1/events/$eventId") {
+            val response = httpClient.get("${ApiConfig.BASE_URL}/api/v1/events/$eventId") {
                 // Add any headers if needed
             }
             

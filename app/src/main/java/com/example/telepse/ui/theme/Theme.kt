@@ -13,19 +13,17 @@ fun TelepseTheme(
     isInDarkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = if (isInDarkTheme) {
+    val colorScheme =
         darkColorScheme(
-            primary = Purple80,
-            secondary = PurpleGrey80,
-            tertiary = Pink80
+            primary = com.example.telepse.ui.tv.TvAppColors.FocusRing,
+            onPrimary = com.example.telepse.ui.tv.TvAppColors.ScreenBackground,
+            secondary = com.example.telepse.ui.tv.TvAppColors.FocusRingSecondary,
+            onSecondary = com.example.telepse.ui.tv.TvAppColors.ScreenBackground,
+            background = com.example.telepse.ui.tv.TvAppColors.ScreenBackground,
+            onBackground = com.example.telepse.ui.tv.TvAppColors.TextPrimary,
+            surface = com.example.telepse.ui.tv.TvAppColors.ScreenBackground,
+            onSurface = com.example.telepse.ui.tv.TvAppColors.TextPrimary,
         )
-    } else {
-        lightColorScheme(
-            primary = Purple40,
-            secondary = PurpleGrey40,
-            tertiary = Pink40
-        )
-    }
     MaterialTheme(
         colorScheme = colorScheme,
         typography = Typography,

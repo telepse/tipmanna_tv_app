@@ -4,8 +4,8 @@ kotlin = "2.0.21"
 coreKtx = "1.10.1"
 appcompat = "1.6.1"
 composeBom = "2024.09.00"
-tvFoundation = "1.0.0-alpha07"
-tvMaterial = "1.0.0-alpha07"
+tvFoundation = "1.0.0"
+tvMaterial = "1.0.1"
 lifecycleRuntimeKtx = "2.6.1"
 activityCompose = "1.8.0"
 ktor = "3.0.3"
@@ -16,13 +16,15 @@ lifecycleViewmodel = "2.8.6"
 coil = "2.7.0"
 exoplayer = "1.2.1"
 zxing = "3.5.4"
-pusher = "2.4.1"
+pusher = "2.4.4"
 gson = "2.10.1"
+securityCrypto = "1.1.0-alpha06"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-foundation = { group = "androidx.compose.foundation", name = "foundation" }
 androidx-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
@@ -71,6 +73,7 @@ pusher-java-client = { group = "com.pusher", name = "pusher-java-client", versio
 
 # Gson for JSON parsing
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
+androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -14,8 +14,16 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class TipAnimationEvent(
     val selectedTips: List<String>, // Array of character names
-    val amount: Double,
-    val sender: String
+    val amount: Double = 0.0,
+    val sender: String = "",
+    val id: String? = null,
+    val seq: Int? = null,
+    val eventId: String? = null,
+    val transactionId: String? = null,
+    val serverTs: Long? = null,
+    val playbackEndsAt: Long? = null,
+    val rewardTurbo: Boolean? = null,
+    val rewardGalaxy: Boolean? = null,
 )
 
 /**

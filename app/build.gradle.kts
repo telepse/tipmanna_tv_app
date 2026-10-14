@@ -13,7 +13,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.telepse"
-        minSdk = 21
+        minSdk = 23
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
@@ -47,6 +47,7 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
+    implementation(libs.androidx.foundation)
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.tv.foundation)
@@ -97,8 +98,11 @@ dependencies {
     
     // Gson for JSON parsing
     implementation(libs.gson)
+    implementation(libs.androidx.security.crypto)
     
     androidTestImplementation(platform(libs.androidx.compose.bom))
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)

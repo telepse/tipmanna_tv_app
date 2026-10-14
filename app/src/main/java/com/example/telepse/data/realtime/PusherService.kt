@@ -7,12 +7,9 @@ import com.example.telepse.data.model.TipAnimationEvent
 import com.example.telepse.data.realtime.PusherConfig
 import com.pusher.client.Pusher
 import com.pusher.client.PusherOptions
-import com.pusher.client.Authorizer
 import com.pusher.client.channel.Channel
 import com.pusher.client.channel.PrivateChannel
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
-import java.net.URLEncoder
+import io.ktor.client.HttpClient
 import com.pusher.client.channel.PusherEvent
 import com.pusher.client.channel.SubscriptionEventListener
 import com.pusher.client.channel.PrivateChannelEventListener
@@ -20,9 +17,12 @@ import com.pusher.client.connection.ConnectionEventListener
 import com.pusher.client.connection.ConnectionState
 import com.pusher.client.connection.ConnectionStateChange
 import android.util.Log
+import com.example.telepse.data.model.TvScheduleUpdatedPayload
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -40,11 +40,16 @@ import javax.inject.Singleton
  * @property pusherCluster Pusher cluster (e.g., "mt1", "eu")
  */
 @Singleton
-class PusherService @Inject constructor() {
+class PusherService @Inject constructor(
+    private val httpClient: HttpClient,
+) {
     
     private var pusher: Pusher? = null
     private var publicChannel: Channel? = null
     private var privateChannel: Channel? = null
+    private var globalLiveTvChannel: Channel? = null
+    @Volatile
+    private var eventCodeForAuth: String? = null
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
@@ -60,6 +65,16 @@ class PusherService @Inject constructor() {
     
     // Mutex to prevent concurrent modifications to Pusher state
     private val pusherMutex = Mutex()
+
+    private val _connectionEstablished =
+        MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /** Emits when Pusher reaches CONNECTED (initial connect or reconnect). */
+    fun observeConnectionEstablished(): Flow<Unit> = _connectionEstablished.asSharedFlow()
+
+    fun setEventCodeForAuth(eventCode: String?) {
+        eventCodeForAuth = eventCode
+    }
     
     /**
      * Initializes and connects to Pusher.
@@ -117,44 +132,10 @@ class PusherService @Inject constructor() {
             val options = PusherOptions()
             options.setCluster(PusherConfig.CLUSTER)
             
-            // Set up client-side authorization for private channels
-            // This mimics pusher.authorizeChannel() from the backend
-            // WARNING: This uses the SECRET on the client side, which is insecure!
-            // This should only be used if you don't have a backend authorization endpoint.
-            // For production, you should use HttpAuthorizer with a backend endpoint.
-            val authorizer = object : Authorizer {
-                override fun authorize(channelName: String, socketId: String): String {
-                    try {
-                        Log.d("PusherService", "🔐 Authorizing private channel: $channelName")
-                        Log.d("PusherService", "   - Socket ID: $socketId")
-                        Log.d("PusherService", "   - Channel: $channelName")
-                        
-                        // Generate HMAC-SHA256 signature (same as pusher.authorizeChannel())
-                        // Format: HMAC-SHA256(socket_id:channel_name, SECRET)
-                        val stringToSign = "$socketId:$channelName"
-                        val secretKey = SecretKeySpec(PusherConfig.SECRET.toByteArray(), "HmacSHA256")
-                        val mac = Mac.getInstance("HmacSHA256")
-                        mac.init(secretKey)
-                        val signature = mac.doFinal(stringToSign.toByteArray())
-                        val authSignature = signature.joinToString("") { "%02x".format(it) }
-                        
-                        // Return authorization response in JSON format
-                        // Format matches: {"auth": "API_KEY:SIGNATURE"}
-                        val authResponse = """{"auth":"${PusherConfig.API_KEY}:$authSignature"}"""
-                        Log.d("PusherService", "✅ Authorization signature generated")
-                        Log.d("PusherService", "   - Auth response: $authResponse")
-                        return authResponse
-                    } catch (e: Exception) {
-                        Log.e("PusherService", "❌ Error generating authorization", e)
-                        e.printStackTrace()
-                        throw e
-                    }
-                }
-            }
-            options.setAuthorizer(authorizer)
-            
-            Log.d("PusherService", "🔐 Client-side authorization configured for private channels")
-            Log.w("PusherService", "⚠️ WARNING: Using SECRET on client side - not secure for production!")
+            options.setAuthorizer(
+                PusherHttpAuthorizer(httpClient) { eventCodeForAuth },
+            )
+            Log.d("PusherService", "🔐 Server-side Pusher auth via /api/v1/tv-app/pusher/auth")
             
             pusher = Pusher(PusherConfig.API_KEY, options)
             pusher?.connect(object : ConnectionEventListener {
@@ -170,6 +151,9 @@ class PusherService @Inject constructor() {
                     when (change.currentState) {
                         ConnectionState.CONNECTED -> {
                             Log.d("PusherService", "✅ Pusher connection established")
+                            if (change.previousState != ConnectionState.CONNECTED) {
+                                _connectionEstablished.tryEmit(Unit)
+                            }
                         }
                         ConnectionState.DISCONNECTED -> {
                             Log.d("PusherService", "❌ Pusher disconnected")
@@ -189,13 +173,14 @@ class PusherService @Inject constructor() {
                     }
                 }
                 
-                override fun onError(message: String, code: String, e: Exception?) {
-                    // Log errors for debugging (matches React: pusherClient.connection.bind("error"))
-                    Log.e("PusherService", "❌ PUSHER ERROR: $message")
-                    Log.e("PusherService", "   - Error code: $code")
+                override fun onError(message: String?, code: String?, e: Exception?) {
+                    // Pusher Java client may invoke with null code/message on websocket faults.
+                    Log.e(
+                        "PusherService",
+                        "❌ PUSHER connection error: ${formatPusherConnectionError(message, code, e)}",
+                    )
                     if (e != null) {
-                        Log.e("PusherService", "   - Exception: ${e.message}", e)
-                        e.printStackTrace()
+                        Log.e("PusherService", "   - Exception detail", e)
                     }
                 }
             }, ConnectionState.ALL)
@@ -253,6 +238,35 @@ class PusherService @Inject constructor() {
             }
         } catch (e: Exception) {
             Log.e("PusherService", "Critical error in subscribeToPublicChannel", e)
+            false
+        }
+    }
+
+    /**
+     * Subscribes to canonical payment animation channel (public).
+     */
+    suspend fun subscribeToGlobalLiveTv(): Boolean = pusherMutex.withLock {
+        return try {
+            pusher?.let { pusherInstance ->
+                if (globalLiveTvChannel?.name == PusherConfig.GLOBAL_LIVE_TV_CHANNEL) {
+                    return true
+                }
+                globalLiveTvChannel?.let { existing ->
+                    try {
+                        pusherInstance.unsubscribe(existing.name)
+                    } catch (_: Exception) {
+                    }
+                }
+                globalLiveTvChannel =
+                    pusherInstance.subscribe(PusherConfig.GLOBAL_LIVE_TV_CHANNEL)
+                Log.d(
+                    "PusherService",
+                    "✅ Subscribed to ${PusherConfig.GLOBAL_LIVE_TV_CHANNEL}",
+                )
+                true
+            } ?: false
+        } catch (e: Exception) {
+            Log.e("PusherService", "Failed to subscribe to global-live-tv", e)
             false
         }
     }
@@ -434,6 +448,7 @@ class PusherService @Inject constructor() {
             Log.d("PusherService", "   [STEP 5] Final cleanup - clearing all references...")
             publicChannel = null
             privateChannel = null
+            globalLiveTvChannel = null
             
             // CRITICAL: Always null out the Pusher instance to force fresh creation on next initialize
             // This prevents issues with trying to reuse a Pusher instance that's still disconnecting
@@ -449,17 +464,71 @@ class PusherService @Inject constructor() {
     }
     
     /**
+     * Invalidation hints for global TV schedule — refresh via GET /api/v1/tv-app/schedule.
+     */
+    fun observeTvScheduleUpdated(): Flow<TvScheduleUpdatedPayload> = callbackFlow {
+        var channel: Channel? = null
+        var attempts = 0
+        while (channel == null && attempts < 20) {
+            channel = globalLiveTvChannel
+            if (channel == null) {
+                delay(100)
+                attempts++
+            }
+        }
+        val finalChannel =
+            channel ?: run {
+                Log.e("PusherService", "global-live-tv not available for tv-schedule-updated")
+                close()
+                return@callbackFlow
+            }
+        val subscription =
+            object : SubscriptionEventListener {
+                override fun onEvent(event: PusherEvent) {
+                    try {
+                        if (globalLiveTvChannel == null) return
+                        val payload =
+                            try {
+                                json.decodeFromString<TvScheduleUpdatedPayload>(event.data)
+                            } catch (_: Exception) {
+                                TvScheduleUpdatedPayload()
+                            }
+                        trySend(payload)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.e("PusherService", "Error handling tv-schedule-updated", e)
+                    }
+                }
+            }
+        finalChannel.bind(PusherConfig.TV_SCHEDULE_UPDATED_EVENT, subscription)
+        Log.d(
+            "PusherService",
+            "✅ Bound ${PusherConfig.TV_SCHEDULE_UPDATED_EVENT} on ${PusherConfig.GLOBAL_LIVE_TV_CHANNEL}",
+        )
+        awaitClose {
+            try {
+                val current = globalLiveTvChannel
+                if (current != null && finalChannel == current) {
+                    finalChannel.unbind(PusherConfig.TV_SCHEDULE_UPDATED_EVENT, subscription)
+                }
+            } catch (e: Exception) {
+                Log.w("PusherService", "Error unbinding tv-schedule-updated", e)
+            }
+        }
+    }
+
+    /**
      * Creates a Flow stream for tip-animation events.
      * These events come from the public channel.
      * 
      * @return Flow of TipAnimationEvent
      */
     fun observeTipAnimation(): Flow<TipAnimationEvent> = callbackFlow {
-        // Wait for public channel to be available (with timeout)
         var channel: Channel? = null
         var attempts = 0
         while (channel == null && attempts < 20) {
-            channel = publicChannel
+            channel = globalLiveTvChannel
             if (channel == null) {
                 kotlinx.coroutines.delay(100)
                 attempts++
@@ -467,7 +536,7 @@ class PusherService @Inject constructor() {
         }
         
         val finalChannel = channel ?: run {
-            Log.e("PusherService", "Public channel not available after waiting")
+            Log.e("PusherService", "global-live-tv channel not available after waiting")
             close()
             return@callbackFlow
         }
@@ -475,12 +544,11 @@ class PusherService @Inject constructor() {
         val subscription = object : SubscriptionEventListener {
             override fun onEvent(event: PusherEvent) {
                 try {
-                    // Check if channel is still valid before processing
-                    if (publicChannel == null) {
-                        Log.d("PusherService", "⚠️ Public channel is null, ignoring tip-animation event")
+                    if (globalLiveTvChannel == null) {
+                        Log.d("PusherService", "⚠️ global-live-tv null, ignoring tip-animation")
                         return
                     }
-                    Log.d("PusherService", "🔔 Received tip-animation event")
+                    Log.d("PusherService", "🔔 Received tip-animation on global-live-tv")
                     Log.d("PusherService", "Raw event data: ${event.data}")
                     Log.d("PusherService", "Event name: ${event.eventName}")
                     
@@ -524,18 +592,18 @@ class PusherService @Inject constructor() {
             }
         }
         
-        finalChannel.bind("tip-animation", subscription)
-        Log.d("PusherService", "✅ Bound to tip-animation event - ready to receive events")
+        finalChannel.bind(PusherConfig.TIP_ANIMATION_EVENT, subscription)
+        Log.d(
+            "PusherService",
+            "✅ Bound to ${PusherConfig.TIP_ANIMATION_EVENT} on ${PusherConfig.GLOBAL_LIVE_TV_CHANNEL}",
+        )
         
         awaitClose {
             try {
-                // Only unbind if channel still exists and is valid
-                val currentChannel = publicChannel
+                val currentChannel = globalLiveTvChannel
                 if (finalChannel != null && currentChannel != null && finalChannel == currentChannel) {
-                    finalChannel.unbind("tip-animation", subscription)
-                    Log.d("PusherService", "✅ Unbound tip-animation listener")
-                } else {
-                    Log.d("PusherService", "⚠️ Skipping tip-animation unbind - channel already disposed")
+                    finalChannel.unbind(PusherConfig.TIP_ANIMATION_EVENT, subscription)
+                    Log.d("PusherService", "✅ Unbound global tip-animation listener")
                 }
             } catch (e: Exception) {
                 Log.w("PusherService", "Error unbinding tip-animation listener", e)
@@ -665,8 +733,12 @@ class PusherService @Inject constructor() {
                 Log.d("PusherService", "✅ Private channel subscription succeeded: $channelName")
             }
             
-            override fun onAuthenticationFailure(message: String, e: Exception?) {
-                Log.e("PusherService", "❌ Private channel authentication failed: $message", e)
+            override fun onAuthenticationFailure(message: String?, e: Exception?) {
+                Log.e(
+                    "PusherService",
+                    "❌ Private channel authentication failed: ${message ?: "(null)"}",
+                    e,
+                )
             }
         }
         

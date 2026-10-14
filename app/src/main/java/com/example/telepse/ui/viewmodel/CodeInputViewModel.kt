@@ -13,6 +13,10 @@ import kotlinx.coroutines.launch
 import android.util.Log
 import javax.inject.Inject
 
+/** Blank-code validation used before network search (unit-testable). */
+internal fun codeInputBlankCodeError(code: String): String? =
+    if (code.trim().isBlank()) "Please enter a code" else null
+
 data class CodeInputUiState(
     val code: String = "",
     val isLoading: Boolean = false,
@@ -41,10 +45,8 @@ class CodeInputViewModel @Inject constructor(
     fun searchEvents() {
         val code = _uiState.value.code.trim()
         
-        if (code.isBlank()) {
-            _uiState.value = _uiState.value.copy(
-                error = "Please enter a code"
-            )
+        codeInputBlankCodeError(code)?.let { message ->
+            _uiState.value = _uiState.value.copy(error = message)
             return
         }
         
