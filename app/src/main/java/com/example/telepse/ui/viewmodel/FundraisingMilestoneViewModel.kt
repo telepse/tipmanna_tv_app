@@ -11,7 +11,6 @@ import com.example.telepse.data.model.TvEventRealtimeHints
 import com.example.telepse.data.repository.AnimationContractRepository
 import com.example.telepse.data.model.ScreenDisplayStatePayload
 import com.example.telepse.data.realtime.DEFAULT_SCREEN_DISPLAY_STATE_EVENT
-import com.example.telepse.data.realtime.DEFAULT_SCREEN_SETTINGS_UPDATED_EVENT
 import com.example.telepse.data.realtime.ScreenDisplayStateApplier
 import com.example.telepse.data.repository.TvEventBootstrapRepository
 import com.example.telepse.player.TipAnimationGuard
@@ -354,8 +353,6 @@ class FundraisingMilestoneViewModel @Inject constructor(
 
         val screenDisplayStateEvent = realtimeHints.events?.screenDisplayState?.takeIf { it.isNotBlank() }
             ?: DEFAULT_SCREEN_DISPLAY_STATE_EVENT
-        val screenSettingsUpdatedEvent = realtimeHints.events?.screenSettingsUpdated?.takeIf { it.isNotBlank() }
-            ?: DEFAULT_SCREEN_SETTINGS_UPDATED_EVENT
         
         viewModelScope.launch {
             try {
@@ -382,20 +379,12 @@ class FundraisingMilestoneViewModel @Inject constructor(
                     return@launch
                 }
                 
-                val privateChannelName = realtimeHints.channels.private
-                if (!pusherService.subscribeToPrivateChannel(privateChannelName)) {
-                    Log.e("FundraisingMilestoneViewModel", "Failed to subscribe to private channel: $privateChannelName")
-                    return@launch
-                }
-                
                 kotlinx.coroutines.delay(500)
                 
                 Log.d("FundraisingMilestoneViewModel", "✅ Pusher initialized and subscribed to:")
                 Log.d("FundraisingMilestoneViewModel", "   - Public channel: $publicChannelName")
                 Log.d("FundraisingMilestoneViewModel", "   - global-live-tv (tip-animation)")
-                Log.d("FundraisingMilestoneViewModel", "   - Private channel: $privateChannelName")
-                Log.d("FundraisingMilestoneViewModel", "   - screen-display-state event: $screenDisplayStateEvent")
-                Log.d("FundraisingMilestoneViewModel", "   - screen-settings-updated event: $screenSettingsUpdatedEvent")
+                Log.d("FundraisingMilestoneViewModel", "   - Venue screen sync: $screenDisplayStateEvent (public only)")
                 
                 // Log that we're about to start observing
                 Log.d("FundraisingMilestoneViewModel", "   - About to start observing flows...")
@@ -542,29 +531,6 @@ class FundraisingMilestoneViewModel @Inject constructor(
             }
         }
         flowJobs.add(screenDisplayStateJob)
-        
-        // Private channel alternative (documented OR; requires private auth)
-        val settingsUpdatedJob = viewModelScope.launch {
-            try {
-                pusherService.observeScreenSettingsUpdated(screenSettingsUpdatedEvent)
-                    .catch { e -> 
-                        // Ignore cancellation exceptions - they're expected when switching events
-                        if (e !is kotlinx.coroutines.CancellationException) {
-                            Log.e("FundraisingMilestoneViewModel", "Error in settings-updated flow", e)
-                        }
-                    }
-                    .collect { payload ->
-                        Log.d("FundraisingMilestoneViewModel", "Received $screenSettingsUpdatedEvent")
-                        applyScreenDisplayState(payload)
-                    }
-            } catch (e: Exception) {
-                // Ignore cancellation exceptions - they're expected when switching events
-                if (e !is kotlinx.coroutines.CancellationException) {
-                    Log.e("FundraisingMilestoneViewModel", "Error collecting settings-updated", e)
-                }
-            }
-        }
-        flowJobs.add(settingsUpdatedJob)
         
         // Observe latest tip updates in separate coroutine
         val latestTipUpdatedJob = viewModelScope.launch {

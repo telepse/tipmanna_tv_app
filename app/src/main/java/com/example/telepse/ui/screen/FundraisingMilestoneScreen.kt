@@ -1,6 +1,8 @@
 package com.example.telepse.ui.screen
 
+import android.app.Activity
 import android.net.Uri
+import android.view.WindowManager
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -27,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -299,6 +302,16 @@ fun FundraisingMilestoneScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val networkMonitor = rememberNetworkMonitor()
+    val view = LocalView.current
+
+    // Venue Screen Display must not sleep while this surface is visible (device policy may still override).
+    DisposableEffect(view) {
+        val window = (view.context as? Activity)?.window
+        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
     
     // Fetch event details
     LaunchedEffect(eventId) {
@@ -481,7 +494,7 @@ fun FundraisingMilestoneScreen(
                             amountRaised = amountRaised,
                             amountToRaise = event.amountToRaise?.toInt() ?: 0,
                             textColor = textColor,
-                            hideAmountText = event.hideProgressBarAmount != true, // Reversed: backend has logic inverted
+                            hideAmountText = !shouldShowProgressBarAmounts(event.hideProgressBarAmount),
                             shouldGlow = shouldGlow,
                             modifier = Modifier.fillMaxWidth()
                         )

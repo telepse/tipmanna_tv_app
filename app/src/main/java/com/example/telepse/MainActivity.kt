@@ -13,6 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.tv.material3.ExperimentalTvMaterial3Api
+import com.example.telepse.data.display.ScreenDisplaySessionStore
 import com.example.telepse.data.repository.AuthRepository
 import com.example.telepse.ui.navigation.Screen
 import com.example.telepse.ui.screen.CodeInputScreen
@@ -31,6 +32,8 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var authRepository: AuthRepository
+
+    @Inject lateinit var screenDisplaySessionStore: ScreenDisplaySessionStore
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) {
@@ -57,7 +60,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             TelepseTheme {
-                TelepseApp(authRepository = authRepository)
+                TelepseApp(
+                    authRepository = authRepository,
+                    screenDisplaySessionStore = screenDisplaySessionStore,
+                )
             }
         }
     }
@@ -67,15 +73,31 @@ private const val NAV_LOG_TAG = "TelepseNav"
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-fun TelepseApp(authRepository: AuthRepository) {
-    var currentScreen by remember { mutableStateOf<Screen>(Screen.JourneyHub) }
+fun TelepseApp(
+    authRepository: AuthRepository,
+    screenDisplaySessionStore: ScreenDisplaySessionStore,
+) {
+    var currentScreen by remember {
+        mutableStateOf<Screen>(
+            screenDisplaySessionStore.lastEventId()?.let { savedId ->
+                Log.d(NAV_LOG_TAG, "resume Screen Display eventId=$savedId")
+                Screen.FundraisingMilestone(savedId)
+            } ?: Screen.JourneyHub,
+        )
+    }
 
     BackHandler(enabled = currentScreen !is Screen.JourneyHub) {
         currentScreen =
             when (currentScreen) {
-                is Screen.FundraisingMilestone -> Screen.CodeInput
+                is Screen.FundraisingMilestone -> {
+                    screenDisplaySessionStore.clearLastEventId()
+                    Screen.CodeInput
+                }
                 is Screen.TipperLogin -> Screen.JourneyHub
-                is Screen.CodeInput,
+                is Screen.CodeInput -> {
+                    screenDisplaySessionStore.clearLastEventId()
+                    Screen.JourneyHub
+                }
                 is Screen.LiveTvFoundation,
                 is Screen.ExplorePlaceholder,
                 is Screen.YouTubePlaybackSpike,
@@ -129,12 +151,16 @@ fun TelepseApp(authRepository: AuthRepository) {
             CodeInputScreen(
                 onCodeValidated = { },
                 onLoadOverlay = { eventId ->
+                    screenDisplaySessionStore.saveLastEventId(eventId)
                     currentScreen = Screen.FundraisingMilestone(eventId)
                 },
                 onOpenYouTubeSpike = {
                     currentScreen = Screen.YouTubePlaybackSpike
                 },
-                onBackToHub = { currentScreen = Screen.JourneyHub },
+                onBackToHub = {
+                    screenDisplaySessionStore.clearLastEventId()
+                    currentScreen = Screen.JourneyHub
+                },
             )
         }
 
@@ -170,7 +196,10 @@ fun TelepseApp(authRepository: AuthRepository) {
         is Screen.FundraisingMilestone -> {
             FundraisingMilestoneScreen(
                 eventId = screen.eventId,
-                onBackClick = { currentScreen = Screen.CodeInput },
+                onBackClick = {
+                    screenDisplaySessionStore.clearLastEventId()
+                    currentScreen = Screen.CodeInput
+                },
             )
         }
     }
