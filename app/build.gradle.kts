@@ -17,7 +17,30 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+    }
 
+    flavorDimensions += "environment"
+    productFlavors {
+        create("staging") {
+            dimension = "environment"
+            applicationIdSuffix = ".staging"
+            versionNameSuffix = "-staging"
+            // Documented staging API (STAGING-HANDOFF / Phase 1 audit)
+            buildConfigField(
+                "String",
+                "API_BASE_URL",
+                "\"https://tipmanna-staging.onrender.com\"",
+            )
+        }
+        create("prod") {
+            dimension = "environment"
+            // Documented production API (BACKEND_URL / prior ApiConfig)
+            buildConfigField(
+                "String",
+                "API_BASE_URL",
+                "\"https://tipmanna-live.onrender.com\"",
+            )
+        }
     }
 
     buildTypes {
@@ -38,6 +61,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
