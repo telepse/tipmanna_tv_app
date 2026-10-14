@@ -7,8 +7,9 @@ import com.example.telepse.data.model.Event
 import com.example.telepse.data.model.TipAnimationEvent
 import com.example.telepse.data.network.NetworkMonitor
 import com.example.telepse.data.realtime.PusherService
+import com.example.telepse.data.model.TvEventRealtimeHints
 import com.example.telepse.data.repository.AnimationContractRepository
-import com.example.telepse.data.repository.EventRepository
+import com.example.telepse.data.repository.TvEventBootstrapRepository
 import com.example.telepse.player.TipAnimationGuard
 import com.example.telepse.ui.animations.AnimationType
 import com.example.telepse.ui.animations.AnimationTypeMapper
@@ -47,7 +48,7 @@ data class FundraisingMilestoneUiState(
 
 @HiltViewModel
 class FundraisingMilestoneViewModel @Inject constructor(
-    private val eventRepository: EventRepository,
+    private val tvEventBootstrapRepository: TvEventBootstrapRepository,
     private val pusherService: PusherService,
     private val networkMonitor: NetworkMonitor,
     private val animationContractRepository: AnimationContractRepository,
@@ -204,14 +205,18 @@ class FundraisingMilestoneViewModel @Inject constructor(
         }
         
         try {
-            Log.d("FundraisingMilestoneViewModel", "   [STEP 3] Fetching event details from repository...")
-            // Fetch event details first
-            val result = eventRepository.getEventById(eventId)
+            Log.d("FundraisingMilestoneViewModel", "   [STEP 3] Fetching tv-app bootstrap from repository...")
+            val result = tvEventBootstrapRepository.getEventBootstrap(eventId)
             result.fold(
-                onSuccess = { event ->
-                    Log.d("FundraisingMilestoneViewModel", "   [STEP 4] ✅ Event fetched successfully")
+                onSuccess = { bootstrap ->
+                    val event = bootstrap.event
+                    Log.d("FundraisingMilestoneViewModel", "   [STEP 4] ✅ Bootstrap fetched successfully")
                     Log.d("FundraisingMilestoneViewModel", "      - Event name: ${event.eventName}")
                     Log.d("FundraisingMilestoneViewModel", "      - Background type: ${event.backgroundType}")
+                    Log.d(
+                        "FundraisingMilestoneViewModel",
+                        "      - Public channel: ${bootstrap.realtime.channels.public}",
+                    )
                     
                     currentEventId = eventId
                     Log.d("FundraisingMilestoneViewModel", "   [STEP 5] Updating UI state with event...")
@@ -226,7 +231,12 @@ class FundraisingMilestoneViewModel @Inject constructor(
                     Log.d("FundraisingMilestoneViewModel", "   [STEP 6] Checking network before initializing Pusher...")
                     if (networkMonitor.isCurrentlyOnline()) {
                         Log.d("FundraisingMilestoneViewModel", "   [STEP 6] ✅ Network online, initializing Pusher...")
-                        initializePusher(eventId, event)
+                        initializePusher(
+                            eventId = eventId,
+                            event = event,
+                            realtimeHints = bootstrap.realtime,
+                            animationContractUrl = bootstrap.animationContractUrl,
+                        )
                     } else {
                         Log.w("FundraisingMilestoneViewModel", "⚠️ Network lost during load, skipping Pusher initialization")
                     }
@@ -315,7 +325,12 @@ class FundraisingMilestoneViewModel @Inject constructor(
     /**
      * Initializes Pusher connection and sets up event listeners.
      */
-    private fun initializePusher(eventId: String, event: Event) {
+    private fun initializePusher(
+        eventId: String,
+        event: Event,
+        realtimeHints: TvEventRealtimeHints,
+        animationContractUrl: String,
+    ) {
         // Only initialize if not already initialized for this event
         if (isPusherInitialized && currentEventId == eventId) {
             Log.d("FundraisingMilestoneViewModel", "Pusher already initialized for event $eventId, skipping")
@@ -335,7 +350,7 @@ class FundraisingMilestoneViewModel @Inject constructor(
         
         viewModelScope.launch {
             try {
-                val staleMs = animationContractRepository.fetchStaleThresholdMs()
+                val staleMs = animationContractRepository.fetchStaleThresholdMs(animationContractUrl)
                 tipAnimationGuard.updateStaleThresholdMs(staleMs)
                 Log.d("FundraisingMilestoneViewModel", "Animation guard staleThresholdMs=$staleMs")
 
@@ -347,7 +362,7 @@ class FundraisingMilestoneViewModel @Inject constructor(
                 
                 kotlinx.coroutines.delay(500)
                 
-                val publicChannelName = "event-$eventId"
+                val publicChannelName = realtimeHints.channels.public
                 if (!pusherService.subscribeToPublicChannel(publicChannelName)) {
                     Log.e("FundraisingMilestoneViewModel", "Failed to subscribe to public channel: $publicChannelName")
                     return@launch
@@ -358,7 +373,7 @@ class FundraisingMilestoneViewModel @Inject constructor(
                     return@launch
                 }
                 
-                val privateChannelName = "private-event-$eventId"
+                val privateChannelName = realtimeHints.channels.private
                 if (!pusherService.subscribeToPrivateChannel(privateChannelName)) {
                     Log.e("FundraisingMilestoneViewModel", "Failed to subscribe to private channel: $privateChannelName")
                     return@launch

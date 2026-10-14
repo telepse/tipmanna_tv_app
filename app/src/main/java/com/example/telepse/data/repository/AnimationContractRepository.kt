@@ -21,10 +21,12 @@ data class AnimationContractResponse(
 class AnimationContractRepository @Inject constructor(
     private val httpClient: HttpClient,
 ) {
-    suspend fun fetchStaleThresholdMs(): Long {
+    suspend fun fetchStaleThresholdMs(contractPath: String? = null): Long {
         return try {
-            val contract: AnimationContractResponse =
-                httpClient.get("${ApiConfig.BASE_URL}/api/v1/tv-app/animations/contract").body()
+            val path = contractPath?.takeIf { it.isNotBlank() }
+                ?: "/api/v1/tv-app/animations/contract"
+            val url = if (path.startsWith("http")) path else "${ApiConfig.BASE_URL}$path"
+            val contract: AnimationContractResponse = httpClient.get(url).body()
             contract.guard.staleThresholdMs
         } catch (_: Exception) {
             DEFAULT_STALE_MS
