@@ -9,6 +9,10 @@ import com.example.telepse.data.network.NetworkMonitor
 import com.example.telepse.data.realtime.PusherService
 import com.example.telepse.data.model.TvEventRealtimeHints
 import com.example.telepse.data.repository.AnimationContractRepository
+import com.example.telepse.data.model.ScreenDisplayStatePayload
+import com.example.telepse.data.realtime.DEFAULT_SCREEN_DISPLAY_STATE_EVENT
+import com.example.telepse.data.realtime.DEFAULT_SCREEN_SETTINGS_UPDATED_EVENT
+import com.example.telepse.data.realtime.ScreenDisplayStateApplier
 import com.example.telepse.data.repository.TvEventBootstrapRepository
 import com.example.telepse.player.TipAnimationGuard
 import com.example.telepse.ui.animations.AnimationType
@@ -347,6 +351,11 @@ class FundraisingMilestoneViewModel @Inject constructor(
         currentEventId = eventId
         tipAnimationGuard.reset()
         pusherService.setEventCodeForAuth(event.eventCode)
+
+        val screenDisplayStateEvent = realtimeHints.events?.screenDisplayState?.takeIf { it.isNotBlank() }
+            ?: DEFAULT_SCREEN_DISPLAY_STATE_EVENT
+        val screenSettingsUpdatedEvent = realtimeHints.events?.screenSettingsUpdated?.takeIf { it.isNotBlank() }
+            ?: DEFAULT_SCREEN_SETTINGS_UPDATED_EVENT
         
         viewModelScope.launch {
             try {
@@ -385,6 +394,8 @@ class FundraisingMilestoneViewModel @Inject constructor(
                 Log.d("FundraisingMilestoneViewModel", "   - Public channel: $publicChannelName")
                 Log.d("FundraisingMilestoneViewModel", "   - global-live-tv (tip-animation)")
                 Log.d("FundraisingMilestoneViewModel", "   - Private channel: $privateChannelName")
+                Log.d("FundraisingMilestoneViewModel", "   - screen-display-state event: $screenDisplayStateEvent")
+                Log.d("FundraisingMilestoneViewModel", "   - screen-settings-updated event: $screenSettingsUpdatedEvent")
                 
                 // Log that we're about to start observing
                 Log.d("FundraisingMilestoneViewModel", "   - About to start observing flows...")
@@ -510,20 +521,41 @@ class FundraisingMilestoneViewModel @Inject constructor(
             }
         }
         flowJobs.add(amountUpdatedJob)
+
+        // Public mirror — venue Screen Display (same payload as web overlay sync)
+        val screenDisplayStateJob = viewModelScope.launch {
+            try {
+                pusherService.observeScreenDisplayState(screenDisplayStateEvent)
+                    .catch { e ->
+                        if (e !is kotlinx.coroutines.CancellationException) {
+                            Log.e("FundraisingMilestoneViewModel", "Error in screen-display-state flow", e)
+                        }
+                    }
+                    .collect { payload ->
+                        Log.d("FundraisingMilestoneViewModel", "Received $screenDisplayStateEvent")
+                        applyScreenDisplayState(payload)
+                    }
+            } catch (e: Exception) {
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    Log.e("FundraisingMilestoneViewModel", "Error collecting screen-display-state", e)
+                }
+            }
+        }
+        flowJobs.add(screenDisplayStateJob)
         
-        // Observe screen settings updates in separate coroutine
+        // Private channel alternative (documented OR; requires private auth)
         val settingsUpdatedJob = viewModelScope.launch {
             try {
-                pusherService.observeScreenSettingsUpdated()
+                pusherService.observeScreenSettingsUpdated(screenSettingsUpdatedEvent)
                     .catch { e -> 
                         // Ignore cancellation exceptions - they're expected when switching events
                         if (e !is kotlinx.coroutines.CancellationException) {
                             Log.e("FundraisingMilestoneViewModel", "Error in settings-updated flow", e)
                         }
                     }
-                    .collect { settingsUpdated ->
-                        Log.d("FundraisingMilestoneViewModel", "Received settings-updated event")
-                        updateScreenSettings(settingsUpdated)
+                    .collect { payload ->
+                        Log.d("FundraisingMilestoneViewModel", "Received $screenSettingsUpdatedEvent")
+                        applyScreenDisplayState(payload)
                     }
             } catch (e: Exception) {
                 // Ignore cancellation exceptions - they're expected when switching events
@@ -644,36 +676,24 @@ class FundraisingMilestoneViewModel @Inject constructor(
     }
     
     /**
-     * Updates screen settings from Pusher event.
+     * Applies screen-display-state / screen-settings-updated broadcast to HUD state.
      */
-    private fun updateScreenSettings(settingsUpdated: com.example.telepse.data.model.ScreenSettingsUpdatedEvent) {
-        val currentEvent = _uiState.value.event
-        if (currentEvent != null) {
-            Log.d("FundraisingMilestoneViewModel", "🔄 Updating screen settings from Pusher event")
-            Log.d("FundraisingMilestoneViewModel", "   - eventBackground: ${settingsUpdated.eventBackground}")
-            Log.d("FundraisingMilestoneViewModel", "   - backgroundType: ${settingsUpdated.backgroundType}")
-            Log.d("FundraisingMilestoneViewModel", "   - hideProgressBarAmount: ${settingsUpdated.hideProgressBarAmount}")
-            Log.d("FundraisingMilestoneViewModel", "   - showLatestAmount: ${settingsUpdated.showLatestAmount}")
-            Log.d("FundraisingMilestoneViewModel", "   - moneyFor: ${settingsUpdated.moneyFor}")
-            Log.d("FundraisingMilestoneViewModel", "   - tipUsageDisclosure: ${settingsUpdated.tipUsageDisclosure?.size} items")
-            
-            _uiState.value = _uiState.value.copy(
-                event = currentEvent.copy(
-                    eventBackground = settingsUpdated.eventBackground ?: currentEvent.eventBackground,
-                    backgroundType = settingsUpdated.backgroundType ?: currentEvent.backgroundType,
-                    hideProgressBarAmount = settingsUpdated.hideProgressBarAmount ?: currentEvent.hideProgressBarAmount,
-                    showLatestAmount = settingsUpdated.showLatestAmount ?: currentEvent.showLatestAmount,
-                    moneyFor = settingsUpdated.moneyFor ?: currentEvent.moneyFor,
-                    tipUsageDisclosure = settingsUpdated.tipUsageDisclosure ?: currentEvent.tipUsageDisclosure,
-                    amountRaised = settingsUpdated.amountRaised ?: currentEvent.amountRaised,
-                    numOfTips = settingsUpdated.numOfTips ?: currentEvent.numOfTips,
-                    latestTipAmount = settingsUpdated.latestTipAmount ?: currentEvent.latestTipAmount
-                )
-            )
-            Log.d("FundraisingMilestoneViewModel", "✅ Screen settings updated successfully")
-        } else {
-            Log.w("FundraisingMilestoneViewModel", "⚠️ Cannot update screen settings: event is null")
+    private fun applyScreenDisplayState(payload: ScreenDisplayStatePayload) {
+        val currentEvent = _uiState.value.event ?: run {
+            Log.w("FundraisingMilestoneViewModel", "⚠️ Ignoring screen display payload: event is null")
+            return
         }
+        if (payload.eventId != null && payload.eventId != currentEventId) {
+            Log.d(
+                "FundraisingMilestoneViewModel",
+                "⚠️ Ignoring screen display payload for other event ${payload.eventId}",
+            )
+            return
+        }
+        _uiState.value = _uiState.value.copy(
+            event = ScreenDisplayStateApplier.apply(currentEvent, payload),
+        )
+        Log.d("FundraisingMilestoneViewModel", "✅ Screen display state applied")
     }
     
     /**

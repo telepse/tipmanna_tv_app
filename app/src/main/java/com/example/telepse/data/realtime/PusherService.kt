@@ -2,7 +2,7 @@ package com.example.telepse.data.realtime
 
 import com.example.telepse.data.model.AmountUpdatedEvent
 import com.example.telepse.data.model.LatestTipUpdatedEvent
-import com.example.telepse.data.model.ScreenSettingsUpdatedEvent
+import com.example.telepse.data.model.ScreenDisplayStatePayload
 import com.example.telepse.data.model.TipAnimationEvent
 import com.example.telepse.data.realtime.PusherConfig
 import com.pusher.client.Pusher
@@ -677,12 +677,75 @@ class PusherService @Inject constructor(
     }
     
     /**
-     * Creates a Flow stream for screen-settings-updated events.
-     * These events come from the private channel.
-     * 
-     * @return Flow of ScreenSettingsUpdatedEvent
+     * Creates a Flow stream for `screen-display-state` on the public event channel.
+     * Event name comes from tv-app bootstrap (`realtime.events.screenDisplayState`).
      */
-    fun observeScreenSettingsUpdated(): Flow<ScreenSettingsUpdatedEvent> = callbackFlow {
+    fun observeScreenDisplayState(
+        pusherEventName: String = DEFAULT_SCREEN_DISPLAY_STATE_EVENT,
+    ): Flow<ScreenDisplayStatePayload> = callbackFlow {
+        var channel: Channel? = null
+        var attempts = 0
+        while (channel == null && attempts < 20) {
+            channel = publicChannel
+            if (channel == null) {
+                kotlinx.coroutines.delay(100)
+                attempts++
+            }
+        }
+
+        val finalChannel = channel ?: run {
+            Log.e("PusherService", "Public channel not available for screen-display-state")
+            close()
+            return@callbackFlow
+        }
+
+        val subscription = object : SubscriptionEventListener {
+            override fun onEvent(event: PusherEvent) {
+                try {
+                    if (publicChannel == null) {
+                        Log.d("PusherService", "⚠️ Public channel null, ignoring screen-display-state")
+                        return
+                    }
+                    Log.d("PusherService", "🔔 Received $pusherEventName: ${event.data}")
+                    val payload = parseScreenDisplayStatePayload(event.data)
+                    if (payload == null) {
+                        Log.w("PusherService", "⚠️ Ignoring malformed $pusherEventName payload")
+                        return
+                    }
+                    trySend(payload)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("PusherService", "❌ Error handling $pusherEventName", e)
+                }
+            }
+        }
+
+        finalChannel.bind(pusherEventName, subscription)
+        Log.d("PusherService", "✅ Bound to $pusherEventName on public channel")
+
+        awaitClose {
+            try {
+                val currentChannel = publicChannel
+                if (finalChannel != null && currentChannel != null && finalChannel == currentChannel) {
+                    finalChannel.unbind(pusherEventName, subscription)
+                    Log.d("PusherService", "✅ Unbound $pusherEventName listener")
+                }
+            } catch (e: Exception) {
+                Log.w("PusherService", "Error unbinding $pusherEventName listener", e)
+            }
+        }
+    }
+
+    /**
+     * Creates a Flow stream for screen-settings-updated events.
+     * These events come from the private channel (same payload as screen-display-state).
+     *
+     * @return Flow of ScreenDisplayStatePayload
+     */
+    fun observeScreenSettingsUpdated(
+        pusherEventName: String = DEFAULT_SCREEN_SETTINGS_UPDATED_EVENT,
+    ): Flow<ScreenDisplayStatePayload> = callbackFlow {
         // Wait for private channel to be available (with timeout)
         var channel: Channel? = null
         var attempts = 0
@@ -708,17 +771,13 @@ class PusherService @Inject constructor(
                         Log.d("PusherService", "⚠️ Private channel is null, ignoring event")
                         return
                     }
-                    Log.d("PusherService", "🔔 Received screen-settings-updated event from private channel")
-                    Log.d("PusherService", "   - Event name: ${event.eventName}")
-                    Log.d("PusherService", "   - Raw event data: ${event.data}")
-                    val settingsUpdated = json.decodeFromString<ScreenSettingsUpdatedEvent>(event.data)
-                    Log.d("PusherService", "✅ Parsed settings-updated successfully")
-                    Log.d("PusherService", "   - eventBackground: ${settingsUpdated.eventBackground}")
-                    Log.d("PusherService", "   - backgroundType: ${settingsUpdated.backgroundType}")
-                    Log.d("PusherService", "   - hideProgressBarAmount: ${settingsUpdated.hideProgressBarAmount}")
-                    Log.d("PusherService", "   - showLatestAmount: ${settingsUpdated.showLatestAmount}")
-                    Log.d("PusherService", "   - moneyFor: ${settingsUpdated.moneyFor}")
-                    trySend(settingsUpdated)
+                    Log.d("PusherService", "🔔 Received $pusherEventName from private channel")
+                    val payload = parseScreenDisplayStatePayload(event.data)
+                    if (payload == null) {
+                        Log.w("PusherService", "⚠️ Ignoring malformed $pusherEventName payload")
+                        return
+                    }
+                    trySend(payload)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     // Cancellation is expected when disconnecting - don't log as error
                     throw e
@@ -742,18 +801,18 @@ class PusherService @Inject constructor(
             }
         }
         
-        finalChannel.bind("screen-settings-updated", subscription)
-        Log.d("PusherService", "✅ Bound to screen-settings-updated event on private channel - ready to receive events")
+        finalChannel.bind(pusherEventName, subscription)
+        Log.d("PusherService", "✅ Bound to $pusherEventName on private channel")
         
         awaitClose {
             try {
                 // Only unbind if channel still exists and is valid
                 val currentChannel = privateChannel
                 if (finalChannel != null && currentChannel != null && finalChannel == currentChannel) {
-                    finalChannel.unbind("screen-settings-updated", subscription)
-                    Log.d("PusherService", "✅ Unbound screen-settings-updated listener")
+                    finalChannel.unbind(pusherEventName, subscription)
+                    Log.d("PusherService", "✅ Unbound $pusherEventName listener")
                 } else {
-                    Log.d("PusherService", "⚠️ Skipping screen-settings-updated unbind - channel already disposed")
+                    Log.d("PusherService", "⚠️ Skipping $pusherEventName unbind - channel already disposed")
                 }
             } catch (e: Exception) {
                 Log.w("PusherService", "Error unbinding screen-settings-updated listener", e)
