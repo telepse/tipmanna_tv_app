@@ -25,6 +25,7 @@ class TvModeEnginePusherRefreshTest {
                 refreshSignals = signals,
                 debounceMs = 100,
                 pollIntervalMs = null,
+                errorRecoveryDelayMs = null,
             )
         engine.start()
         advanceUntilIdle()
@@ -53,6 +54,7 @@ class TvModeEnginePusherRefreshTest {
                 refreshSignals = signals,
                 debounceMs = 200,
                 pollIntervalMs = null,
+                errorRecoveryDelayMs = null,
             )
         engine.start()
         advanceUntilIdle()
@@ -79,6 +81,7 @@ class TvModeEnginePusherRefreshTest {
                 refreshSignals = signals,
                 debounceMs = 500,
                 pollIntervalMs = null,
+                errorRecoveryDelayMs = null,
             )
         engine.start()
         advanceUntilIdle()
@@ -100,6 +103,7 @@ class TvModeEnginePusherRefreshTest {
                 scope = this,
                 refreshSignals = null,
                 pollIntervalMs = null,
+                errorRecoveryDelayMs = null,
             )
         engine.start()
         advanceUntilIdle()
@@ -119,6 +123,7 @@ class TvModeEnginePusherRefreshTest {
                 scope = this,
                 refreshSignals = signals,
                 pollIntervalMs = null,
+                errorRecoveryDelayMs = null,
             )
         engine.start()
         advanceUntilIdle()

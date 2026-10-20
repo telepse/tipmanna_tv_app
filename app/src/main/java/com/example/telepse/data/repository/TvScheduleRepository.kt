@@ -1,8 +1,11 @@
 package com.example.telepse.data.repository
 
+import android.util.Log
+import com.example.telepse.data.auth.SessionStore
 import com.example.telepse.data.model.TvScheduleFetchOutcome
 import com.example.telepse.data.model.TvScheduleResponse
 import com.example.telepse.data.network.ApiConfig
+import com.example.telepse.data.network.ScheduleHttpException
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
@@ -17,6 +20,7 @@ import javax.inject.Singleton
 @Singleton
 class TvScheduleRepository @Inject constructor(
     private val httpClient: HttpClient,
+    private val sessionStore: SessionStore,
 ) {
     suspend fun fetchGlobalSchedule(ifNoneMatch: String? = null): Result<TvScheduleFetchOutcome> {
         return runCatching {
@@ -35,7 +39,10 @@ class TvScheduleRepository @Inject constructor(
                 )
             }
             if (!response.status.isSuccess()) {
-                error("Schedule HTTP ${response.status.value}: ${response.bodyAsText()}")
+                val status = response.status.value
+                val authPresent = sessionStore.accessToken() != null
+                Log.w(TAG, "fetchGlobalSchedule http=$status authPresent=$authPresent")
+                throw ScheduleHttpException(httpStatus = status, authPresent = authPresent)
             }
             TvScheduleFetchOutcome(
                 notModified = false,
@@ -43,5 +50,9 @@ class TvScheduleRepository @Inject constructor(
                 etag = etag,
             )
         }
+    }
+
+    companion object {
+        private const val TAG = "TvScheduleRepository"
     }
 }

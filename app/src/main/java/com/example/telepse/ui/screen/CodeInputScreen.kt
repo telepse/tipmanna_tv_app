@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -60,13 +61,6 @@ import com.example.telepse.ui.network.NetworkStatusIndicator
 import com.example.telepse.ui.network.rememberNetworkMonitor
 import com.example.telepse.ui.theme.*
 import com.example.telepse.ui.viewmodel.CodeInputViewModel
-import java.time.Instant
-import java.time.LocalDateTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
-import java.time.LocalDate
-import java.time.LocalTime
 
 @OptIn(
     ExperimentalTvMaterial3Api::class,
@@ -90,6 +84,7 @@ fun CodeInputScreen(
     val codeFocus = remember { FocusRequester() }
     val iconSearchFocus = remember { FocusRequester() }
     val primaryActionFocus = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
     
     val currentEvent = viewModel.getCurrentEvent()
     val hasEvents = uiState.events.isNotEmpty()
@@ -97,7 +92,10 @@ fun CodeInputScreen(
     val canNavigatePrevious = uiState.events.size > 1
     
     LaunchedEffect(Unit) {
-        codeFocus.requestInitialTvFocus()
+        // Initial entry only — do not re-focus the search field after results.
+        if (!hasEvents) {
+            codeFocus.requestInitialTvFocus()
+        }
     }
 
     DisposableEffect(Unit) {
@@ -111,10 +109,13 @@ fun CodeInputScreen(
             textValue = uiState.code
         }
     }
-    
-    // Show event details when events are loaded
-    LaunchedEffect(uiState.events) {
-        // Events loaded, UI will update automatically
+
+    // After search results land: hide IME and move focus to Load Overlay (not the text field).
+    LaunchedEffect(hasEvents, uiState.isLoading) {
+        if (hasEvents && !uiState.isLoading) {
+            keyboardController?.hide()
+            primaryActionFocus.requestInitialTvFocus(delayMs = 80L)
+        }
     }
     
     // Background image path
@@ -433,15 +434,7 @@ fun EventDetailsCard(
     onNext: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    // Format date and time
-    val formattedDate = try {
-        val instant = Instant.parse(event.eventDate)
-        val dateTime = LocalDateTime.ofInstant(instant, ZoneId.systemDefault())
-        val dateFormatter = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
-        dateFormatter.format(dateTime)
-    } catch (e: Exception) {
-        event.eventDate
-    }
+    val formattedDate = formatEventDisplayDate(event.eventDate)
     
     val formattedTime = event.startTime
     
@@ -462,6 +455,7 @@ fun EventDetailsCard(
                     onClick = onPrevious,
                     modifier = Modifier
                         .size(40.dp)
+                        .tvFocusRing(cornerRadiusDp = 8)
                         .background(
                             color = BackgroundWhite,
                             shape = RoundedCornerShape(8.dp)
@@ -595,6 +589,7 @@ fun EventDetailsCard(
                     onClick = onNext,
                     modifier = Modifier
                         .size(40.dp)
+                        .tvFocusRing(cornerRadiusDp = 8)
                         .background(
                             color = BackgroundWhite,
                             shape = RoundedCornerShape(8.dp)
@@ -620,6 +615,7 @@ fun EventDetailsCard(
                     },
                     modifier = Modifier
                         .size(40.dp)
+                        .tvFocusRing(cornerRadiusDp = 8)
                         .background(
                             color = BackgroundWhite,
                             shape = RoundedCornerShape(8.dp)
@@ -647,45 +643,10 @@ fun EventDetailsCard(
  */
 @Composable
 fun getEventStatus(event: Event): Triple<String, Color, Color> {
-    val now = LocalDateTime.now()
-    
-    return try {
-        // Parse event date
-        val eventInstant = Instant.parse(event.eventDate)
-        val eventDateTime = LocalDateTime.ofInstant(eventInstant, ZoneId.systemDefault())
-        val eventDate = eventDateTime.toLocalDate()
-        val currentDate = now.toLocalDate()
-        
-        // Parse end time if available
-        val endTime = event.endTime?.let {
-            try {
-                LocalTime.parse(it)
-            } catch (e: Exception) {
-                null
-            }
-        }
-        
-        when {
-            // Event date is in the past
-            eventDate.isBefore(currentDate) -> {
-                Triple("Completed", Color.Black, Color.White)
-            }
-            // Event date is today
-            eventDate.isEqual(currentDate) -> {
-                // Check if end time has passed
-                if (endTime != null && now.toLocalTime().isAfter(endTime)) {
-                    Triple("Completed", Color.Black, Color.White)
-                } else {
-                    Triple("Ongoing", OngoingBlue, Color.White)
-                }
-            }
-            // Event date is in the future
-            else -> {
-                Triple("Not started", Color(0xFFF5F6F7), Color.Black)
-            }
-        }
-    } catch (e: Exception) {
-        // Fallback to default status if parsing fails
-        Triple("Pending", OngoingBlue, Color.White)
+    return when (eventStatusFromDateFields(event.eventDate, event.endTime)) {
+        EventStatusBadge.Completed -> Triple("Completed", Color.Black, Color.White)
+        EventStatusBadge.Ongoing -> Triple("Ongoing", OngoingBlue, Color.White)
+        EventStatusBadge.NotStarted -> Triple("Not started", Color(0xFFF5F6F7), Color.Black)
+        EventStatusBadge.Pending -> Triple("Pending", OngoingBlue, Color.White)
     }
 }

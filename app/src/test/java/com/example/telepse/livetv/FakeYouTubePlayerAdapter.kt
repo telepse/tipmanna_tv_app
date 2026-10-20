@@ -13,6 +13,7 @@ class FakeYouTubePlayerAdapter : YouTubePlayerAdapter {
 
     val loadCalls = mutableListOf<Pair<String, Float>>()
     val seekCalls = mutableListOf<Float>()
+    val playCalls = mutableListOf<Unit>()
     var ready = true
 
     override fun attachWebView(webView: android.webkit.WebView) {}
@@ -28,7 +29,17 @@ class FakeYouTubePlayerAdapter : YouTubePlayerAdapter {
         load(videoId, startSeconds)
     }
 
-    override fun play() {}
+    override fun play() {
+        playCalls.add(Unit)
+    }
+
+    fun emitState(state: YouTubePlayerState) {
+        _events.tryEmit(YouTubePlayerEvent.StateChanged(state))
+    }
+
+    fun emitError(code: Int = 150) {
+        _events.tryEmit(YouTubePlayerEvent.Error(code))
+    }
     override fun pause() {}
     override fun seekTo(seconds: Float) {
         seekCalls.add(seconds)

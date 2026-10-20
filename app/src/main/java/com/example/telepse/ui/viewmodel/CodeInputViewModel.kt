@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.telepse.data.model.Event
 import com.example.telepse.data.network.NetworkMonitor
+import com.example.telepse.data.network.normalizeEventCode
 import com.example.telepse.data.repository.EventRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,11 +44,16 @@ class CodeInputViewModel @Inject constructor(
     }
     
     fun searchEvents() {
-        val code = _uiState.value.code.trim()
-        
+        val code = normalizeEventCode(_uiState.value.code)
+
         codeInputBlankCodeError(code)?.let { message ->
             _uiState.value = _uiState.value.copy(error = message)
             return
+        }
+
+        // Keep the field showing the normalized code (trim + uppercase).
+        if (_uiState.value.code != code) {
+            _uiState.value = _uiState.value.copy(code = code)
         }
         
         // Check network status before attempting search

@@ -51,8 +51,12 @@ import com.example.telepse.data.network.NetworkMonitor
 import com.example.telepse.ui.network.NetworkStatusIndicator
 import com.example.telepse.ui.network.rememberNetworkMonitor
 import com.example.telepse.ui.animations.CharacterAnimation
-import com.example.telepse.ui.background.getEventBackgroundResource
+import com.example.telepse.ui.background.EventBackgroundMedia
+import com.example.telepse.ui.background.resolveEventBackgroundMedia
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.telepse.ui.theme.*
+import com.example.telepse.ui.tv.tvFocusRing
 import com.example.telepse.ui.viewmodel.AnimationTrigger
 import com.example.telepse.ui.viewmodel.FundraisingMilestoneViewModel
 import com.google.zxing.BarcodeFormat
@@ -324,30 +328,11 @@ fun FundraisingMilestoneScreen(
     // CRITICAL: Only render if event matches eventId to prevent stale data during transitions
     // If event data doesn't match eventId, treat it as loading state
     if (event != null && event.id == eventId) {
-        // Create ExoPlayerManager ONLY when we have the correct event data
-        // This prevents creating a player manager when UI state is null/mismatched
-        val playerManager = remember(eventId) {
-            android.util.Log.d("FundraisingMilestoneScreen", "🎬 Creating ExoPlayerManager for event: $eventId")
-            ExoPlayerManager(context)
-        }
-        
-        // Release ExoPlayerManager when eventId changes or screen leaves
-        DisposableEffect(eventId) {
-            android.util.Log.d("FundraisingMilestoneScreen", "🔧 [SCREEN] Event entered: $eventId")
-            
-            onDispose {
-                android.util.Log.d("FundraisingMilestoneScreen", "🧹 [SCREEN] Event leaving: $eventId - releasing ExoPlayerManager")
-                playerManager.release()
-                android.util.Log.d("FundraisingMilestoneScreen", "✅ ExoPlayerManager released for event: $eventId")
+        val backgroundMedia =
+            remember(event.backgroundType, event.eventBackground) {
+                resolveEventBackgroundMedia(event.eventBackground, event.backgroundType)
             }
-        }
-        // Get background resource based on event background type
-        val backgroundResourceId = getEventBackgroundResource(
-            backgroundType = event.backgroundType,
-            eventBackground = event.eventBackground
-        )
-        val backgroundUri = Uri.parse("android.resource://${context.packageName}/${backgroundResourceId}")
-        
+
         // Determine text color based on background type
         val textColor = getTextColorForBackground(event.backgroundType, event.eventBackground)
         
@@ -360,16 +345,41 @@ fun FundraisingMilestoneScreen(
                     .zIndex(2000f) // Above everything
             )
             
-            // Video Background - pass playerManager for synchronized operations
-            // CRITICAL: Use key() to ensure VideoBackground is completely recreated per event
-            // This cancels any pending LaunchedEffects from previous events
-            key(eventId) {
-                VideoBackground(
-                    uri = backgroundUri,
-                    resourceId = backgroundResourceId,
-                    playerManager = playerManager,
-                    modifier = Modifier.fillMaxSize()
-                )
+            when (val media = backgroundMedia) {
+                is EventBackgroundMedia.LocalRaw -> {
+                    val backgroundResourceId = media.resourceId
+                    val backgroundUri =
+                        Uri.parse(
+                            "android.resource://${context.packageName}/$backgroundResourceId",
+                        )
+                    val playerManager =
+                        remember(eventId, backgroundResourceId) {
+                            android.util.Log.d(
+                                "FundraisingMilestoneScreen",
+                                "🎬 Creating ExoPlayerManager for event=$eventId resource=$backgroundResourceId",
+                            )
+                            ExoPlayerManager(context)
+                        }
+                    DisposableEffect(eventId, backgroundResourceId) {
+                        onDispose {
+                            playerManager.release()
+                        }
+                    }
+                    key(eventId, backgroundResourceId) {
+                        VideoBackground(
+                            uri = backgroundUri,
+                            resourceId = backgroundResourceId,
+                            playerManager = playerManager,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+                is EventBackgroundMedia.RemoteImage -> {
+                    RemoteImageBackground(
+                        url = media.url,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
             
             // Content Overlay - Full height container
@@ -390,7 +400,10 @@ fun FundraisingMilestoneScreen(
                     // Back Arrow (Top Left)
                     IconButton(
                         onClick = onBackClick,
-                        modifier = Modifier.size(40.dp)
+                        modifier =
+                            Modifier
+                                .size(40.dp)
+                                .tvFocusRing(cornerRadiusDp = 8),
                     ) {
                         Icon(
                             imageVector = Icons.Default.ArrowBack,
@@ -403,7 +416,10 @@ fun FundraisingMilestoneScreen(
                     // Star Icon (Top Right)
                     IconButton(
                         onClick = { /* Handle favorite */ },
-                        modifier = Modifier.size(40.dp)
+                        modifier =
+                            Modifier
+                                .size(40.dp)
+                                .tvFocusRing(cornerRadiusDp = 8),
                     ) {
                         Icon(
                             imageVector = Icons.Default.Star,
@@ -494,7 +510,7 @@ fun FundraisingMilestoneScreen(
                             amountRaised = amountRaised,
                             amountToRaise = event.amountToRaise?.toInt() ?: 0,
                             textColor = textColor,
-                            hideAmountText = !shouldShowProgressBarAmounts(event.hideProgressBarAmount),
+                            showProgressAmounts = shouldShowProgressBarAmounts(event.hideProgressBarAmount),
                             shouldGlow = shouldGlow,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -632,7 +648,35 @@ fun FundraisingMilestoneScreen(
 }
 
 @Composable
-private fun VideoBackground(
+private fun RemoteImageBackground(
+    url: String,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    var loadFailed by remember(url) { mutableStateOf(false) }
+    if (loadFailed) {
+        Box(
+            modifier =
+                modifier.background(Color.Black),
+        )
+        return
+    }
+    AsyncImage(
+        model =
+            ImageRequest.Builder(context)
+                .data(url)
+                .crossfade(true)
+                .listener(
+                    onError = { _, _ -> loadFailed = true },
+                )
+                .build(),
+        contentDescription = null,
+        modifier = modifier,
+    )
+}
+
+@Composable
+internal fun VideoBackground(
     uri: Uri,
     resourceId: Int,
     playerManager: ExoPlayerManager,
@@ -717,7 +761,7 @@ fun ProgressBarSection(
     amountRaised: Int,
     amountToRaise: Int,
     textColor: Color,
-    hideAmountText: Boolean = false,
+    showProgressAmounts: Boolean = true,
     shouldGlow: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -799,8 +843,7 @@ fun ProgressBarSection(
         
         // Row with three items below the progress bar: Amount Raised (left), tipmanna.com (center), Target (right)
         // All three on the same row, with target aligned to be beneath the icon
-        // Hide this row when hideAmountText is true
-        if (!hideAmountText) {
+        if (showProgressAmounts) {
             // Match the exact width of progress bar (320.dp) + spacing (16.dp) + icon (36.dp) = 372.dp
             Box(
                 modifier = Modifier

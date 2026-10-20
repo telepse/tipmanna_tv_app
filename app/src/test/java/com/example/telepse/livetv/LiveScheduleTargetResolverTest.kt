@@ -23,6 +23,20 @@ class LiveScheduleTargetResolverTest {
     }
 
     @Test
+    fun resolve_usesLiveIndexAcrossMultipleItems() {
+        val schedule =
+            FakeTvScheduleSource.sampleScheduleWithItems(
+                videoIds = listOf("Ffs0YHm2jks", "P4kFofLwPLY"),
+                liveIndex = 1,
+                offsetSeconds = 7,
+            )
+        val target = LiveScheduleTargetResolver.resolve(schedule).getOrThrow()
+        assertEquals("P4kFofLwPLY", target.videoId)
+        assertEquals(1, target.scheduleIndex)
+        assertEquals(7f, target.startSeconds)
+    }
+
+    @Test
     fun resolve_malformedUrlFails() {
         val schedule =
             FakeTvScheduleSource.sampleSchedule("Ffs0YHm2jks", 0).copy(

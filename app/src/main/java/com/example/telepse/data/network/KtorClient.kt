@@ -1,12 +1,11 @@
 package com.example.telepse.data.network
 
+import com.example.telepse.BuildConfig
 import com.example.telepse.data.auth.SessionStore
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.android.Android
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
-import io.ktor.client.plugins.logging.LogLevel
-import io.ktor.client.plugins.logging.Logging
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.request.header
 import io.ktor.http.HttpHeaders
@@ -30,9 +29,8 @@ class KtorClient @Inject constructor(
                     },
                 )
             }
-            install(Logging) {
-                level = LogLevel.INFO
-            }
+            KtorClientLogging.configureHttpLogging(this, BuildConfig.DEBUG)
+            KtorClientTimeouts.configureHttpTimeouts(this)
             install(WebSockets)
             defaultRequest {
                 sessionStore.accessToken()?.let { token ->

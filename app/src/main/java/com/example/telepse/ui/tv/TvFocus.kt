@@ -23,7 +23,10 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
-/** High-contrast TV focus ring — use on focusable controls (not on non-focusable containers). */
+/**
+ * Shared Journey Hub–style focus/click feedback for interactive TV controls
+ * (buttons, icon buttons, text fields). Prefer this over ad-hoc borders.
+ */
 fun Modifier.tvFocusRing(
     cornerRadiusDp: Int = 10,
     enabled: Boolean = true,

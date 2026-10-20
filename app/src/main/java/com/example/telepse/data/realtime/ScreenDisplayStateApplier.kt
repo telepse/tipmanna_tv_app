@@ -18,13 +18,48 @@ object ScreenDisplayStateApplier {
             amountRaised = patch.amountRaised ?: current.amountRaised,
             numOfTips = patch.numOfTips ?: current.numOfTips,
             latestTipAmount = patch.latestTipAmount ?: current.latestTipAmount,
-            eventBackground = patch.eventBackground ?: current.eventBackground,
-            backgroundType = patch.backgroundType ?: current.backgroundType,
-            hideProgressBarAmount = patch.hideProgressBarAmount ?: current.hideProgressBarAmount,
-            showLatestAmount = patch.showLatestAmount ?: current.showLatestAmount,
-            moneyFor = patch.moneyFor ?: current.moneyFor,
-            tipUsageDisclosure = patch.tipUsageDisclosure ?: current.tipUsageDisclosure,
-            performers = patch.performers ?: current.performers,
+            eventBackground =
+                if (patch.eventBackgroundPresent) {
+                    patch.eventBackground
+                } else {
+                    current.eventBackground
+                },
+            backgroundType =
+                if (patch.backgroundTypePresent) {
+                    patch.backgroundType
+                } else {
+                    current.backgroundType
+                },
+            hideProgressBarAmount =
+                if (patch.hideProgressBarAmountPresent) {
+                    patch.hideProgressBarAmount == true
+                } else {
+                    current.hideProgressBarAmount
+                },
+            showLatestAmount =
+                if (patch.showLatestAmountPresent) {
+                    patch.showLatestAmount == true
+                } else {
+                    current.showLatestAmount
+                },
+            moneyFor =
+                if (patch.moneyForPresent) {
+                    patch.moneyFor
+                } else {
+                    current.moneyFor
+                },
+            tipUsageDisclosure =
+                if (patch.tipUsageDisclosurePresent) {
+                    patch.tipUsageDisclosure
+                } else {
+                    current.tipUsageDisclosure
+                },
+            performers =
+                if (patch.performersPresent) {
+                    patch.performers
+                } else {
+                    current.performers
+                },
         )
     }
 }

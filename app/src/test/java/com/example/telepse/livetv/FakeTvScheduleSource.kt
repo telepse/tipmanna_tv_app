@@ -30,19 +30,35 @@ class FakeTvScheduleSource : TvScheduleSource {
             index: Int,
             offsetSeconds: Int = 10,
         ): TvScheduleResponse {
-            val url = "https://www.youtube.com/watch?v=$videoId"
+            return sampleScheduleWithItems(
+                videoIds = listOf(videoId),
+                liveIndex = index,
+                offsetSeconds = offsetSeconds,
+            )
+        }
+
+        fun sampleScheduleWithItems(
+            videoIds: List<String>,
+            liveIndex: Int,
+            offsetSeconds: Int = 10,
+        ): TvScheduleResponse {
+            val items =
+                videoIds.mapIndexed { idx, videoId ->
+                    TvScheduleItem(
+                        id = "row-$idx",
+                        channel =
+                            TvScheduleChannel(
+                                url = "https://www.youtube.com/watch?v=$videoId",
+                                title = "Test $idx",
+                            ),
+                    )
+                }
             return TvScheduleResponse(
                 scheduleState = "OK",
-                items =
-                    listOf(
-                        TvScheduleItem(
-                            id = "row-$index",
-                            channel = TvScheduleChannel(url = url, title = "Test"),
-                        ),
-                    ),
+                items = items,
                 livePosition =
                     TvLivePosition(
-                        scheduleIndex = index,
+                        scheduleIndex = liveIndex,
                         offsetSeconds = offsetSeconds,
                     ),
             )

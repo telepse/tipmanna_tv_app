@@ -17,16 +17,28 @@ import com.pusher.client.connection.ConnectionEventListener
 import com.pusher.client.connection.ConnectionState
 import com.pusher.client.connection.ConnectionStateChange
 import android.util.Log
+import com.example.telepse.data.community.DEFAULT_COMMUNITY_DISPLAY_UPDATED_EVENT
+import com.example.telepse.data.community.parseCommunityDisplayUpdatedPayload
+import com.example.telepse.data.model.CommunityDisplayUpdatedPayload
+import com.example.telepse.data.model.CommunityRoomRealtimeHints
+import com.example.telepse.data.model.TvEventRealtimeEventNames
+import com.example.telepse.data.model.TvEventRealtimeHints
 import com.example.telepse.data.model.TvScheduleUpdatedPayload
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
+import com.example.telepse.data.auth.SessionExpiryHandler
+import com.example.telepse.data.auth.SessionStore
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -42,8 +54,24 @@ import javax.inject.Singleton
 @Singleton
 class PusherService @Inject constructor(
     private val httpClient: HttpClient,
+    private val sessionStore: SessionStore,
+    private val sessionExpiryHandler: SessionExpiryHandler,
 ) {
-    
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    init {
+        serviceScope.launch {
+            var wasLoggedIn = sessionStore.snapshot.value.loggedIn
+            sessionStore.snapshot.collect { snap ->
+                if (wasLoggedIn && !snap.loggedIn) {
+                    dropAuthenticatedPrivateChannelSubscription()
+                }
+                wasLoggedIn = snap.loggedIn
+            }
+        }
+    }
+
     private var pusher: Pusher? = null
     private var publicChannel: Channel? = null
     private var privateChannel: Channel? = null
@@ -72,8 +100,318 @@ class PusherService @Inject constructor(
     /** Emits when Pusher reaches CONNECTED (initial connect or reconnect). */
     fun observeConnectionEstablished(): Flow<Unit> = _connectionEstablished.asSharedFlow()
 
+    private val _screenDisplayStatePayloads =
+        MutableSharedFlow<ScreenDisplayStatePayload>(extraBufferCapacity = 16)
+
+    private var screenDisplayPusherEventName: String = DEFAULT_SCREEN_DISPLAY_STATE_EVENT
+    private var screenDisplaySubscription: SubscriptionEventListener? = null
+    private var boundScreenDisplayEventName: String? = null
+
+    private var configuredCredentials: ResolvedPusherCredentials? = null
+    private var activeCredentialsKey: String? = null
+    private var activeCredentialsCluster: String? = null
+
+    private var amountUpdatedEventName: String = "event-amount-updated"
+    private var latestTipUpdatedEventName: String = "latest-tip-updated"
+    private var tipAnimationEventName: String = PusherConfig.TIP_ANIMATION_EVENT
+
+    private val _amountUpdatedEvents =
+        MutableSharedFlow<AmountUpdatedEvent>(extraBufferCapacity = 16)
+    private val _latestTipUpdatedEvents =
+        MutableSharedFlow<LatestTipUpdatedEvent>(extraBufferCapacity = 16)
+    private val _tipAnimationEvents =
+        MutableSharedFlow<TipAnimationEvent>(extraBufferCapacity = 8)
+    private val _tvScheduleUpdated =
+        MutableSharedFlow<TvScheduleUpdatedPayload>(extraBufferCapacity = 4)
+
+    private var amountUpdatedSubscription: SubscriptionEventListener? = null
+    private var boundAmountUpdatedEventName: String? = null
+    private var latestTipUpdatedSubscription: SubscriptionEventListener? = null
+    private var boundLatestTipUpdatedEventName: String? = null
+    private var tipAnimationSubscription: SubscriptionEventListener? = null
+    private var boundTipAnimationEventName: String? = null
+    private var tvScheduleSubscription: SubscriptionEventListener? = null
+
+    private var communityDisplayChannel: Channel? = null
+    private var communityDisplayUpdatedSubscription: SubscriptionEventListener? = null
+    private var communityDisplayUpdatedEventName: String = DEFAULT_COMMUNITY_DISPLAY_UPDATED_EVENT
+    private val _communityDisplayUpdatedPayloads =
+        MutableSharedFlow<CommunityDisplayUpdatedPayload>(extraBufferCapacity = 8)
+
+    /** Venue HUD event name from tv-app bootstrap (defaults to [DEFAULT_SCREEN_DISPLAY_STATE_EVENT]). */
+    fun setScreenDisplayStateEventName(eventName: String) {
+        val normalized = eventName.trim().takeIf { it.isNotEmpty() }
+            ?: DEFAULT_SCREEN_DISPLAY_STATE_EVENT
+        if (screenDisplayPusherEventName == normalized) return
+        screenDisplayPusherEventName = normalized
+        publicChannel?.let { channel ->
+            bindScreenDisplayStateListener(channel)
+        }
+    }
+
     fun setEventCodeForAuth(eventCode: String?) {
         eventCodeForAuth = eventCode
+    }
+
+    /**
+     * Apply tv-app bootstrap realtime hints (Pusher key/cluster + documented event names).
+     */
+    fun configureFromBootstrap(hints: TvEventRealtimeHints) {
+        configuredCredentials =
+            resolvePusherCredentials(hints.pusherKey, hints.pusherCluster)
+        hints.events?.let { setVenueEventNames(it) }
+        Log.d(
+            "PusherService",
+            "🔧 Bootstrap realtime config: ${formatPusherCredentialDiagnostic(configuredCredentials!!)}",
+        )
+    }
+
+    fun configureFromCommunityRealtime(hints: CommunityRoomRealtimeHints) {
+        configuredCredentials =
+            resolvePusherCredentials(hints.pusherKey, hints.pusherCluster)
+        hints.events?.displayUpdated?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            communityDisplayUpdatedEventName = it
+        }
+        communityDisplayChannel?.let { bindCommunityDisplayUpdatedListener(it) }
+        Log.d(
+            "PusherService",
+            "🔧 Community realtime config: ${formatPusherCredentialDiagnostic(configuredCredentials!!)}",
+        )
+    }
+
+    fun setVenueEventNames(events: TvEventRealtimeEventNames) {
+        events.eventAmountUpdated?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            amountUpdatedEventName = it
+        }
+        events.latestTipUpdated?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            latestTipUpdatedEventName = it
+        }
+        events.tipAnimation?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            tipAnimationEventName = it
+        }
+        publicChannel?.let { bindPublicVenueListeners(it) }
+        globalLiveTvChannel?.let { bindGlobalLiveTvListeners(it) }
+    }
+
+    private fun unbindScreenDisplayStateListener(channel: Channel?) {
+        val listener = screenDisplaySubscription ?: return
+        val eventName = boundScreenDisplayEventName ?: return
+        channel ?: return
+        try {
+            channel.unbind(eventName, listener)
+            Log.d("PusherService", "✅ Unbound $eventName (screen display)")
+        } catch (e: Exception) {
+            Log.w("PusherService", "Error unbinding screen display listener", e)
+        } finally {
+            screenDisplaySubscription = null
+            boundScreenDisplayEventName = null
+        }
+    }
+
+    private fun bindScreenDisplayStateListener(channel: Channel) {
+        unbindScreenDisplayStateListener(channel)
+        val eventName = screenDisplayPusherEventName
+        val subscription = object : SubscriptionEventListener {
+            override fun onEvent(event: PusherEvent) {
+                if (isDisconnecting) {
+                    Log.d("PusherService", "⏭️ Ignoring $eventName — disconnecting")
+                    return
+                }
+                try {
+                    Log.d("PusherService", "🔔 Received $eventName (bound at subscribe)")
+                    val payload = parseScreenDisplayStatePayload(event.data)
+                    if (payload == null) {
+                        Log.w("PusherService", "⚠️ Malformed $eventName payload ignored")
+                        return
+                    }
+                    val emitted = _screenDisplayStatePayloads.tryEmit(payload)
+                    Log.d(
+                        "PusherService",
+                        "📤 Screen display payload emitted=$emitted eventId=${payload.eventId}",
+                    )
+                } catch (e: Exception) {
+                    Log.e("PusherService", "❌ Error handling $eventName", e)
+                }
+            }
+        }
+        channel.bind(eventName, subscription)
+        screenDisplaySubscription = subscription
+        boundScreenDisplayEventName = eventName
+        Log.d(
+            "PusherService",
+            "✅ Bound $eventName on ${channel.name} (subscription-confirmed channel object)",
+        )
+    }
+
+    private fun unbindAmountUpdatedListener(channel: Channel?) {
+        val listener = amountUpdatedSubscription ?: return
+        val eventName = boundAmountUpdatedEventName ?: return
+        channel ?: return
+        try {
+            channel.unbind(eventName, listener)
+        } catch (e: Exception) {
+            Log.w("PusherService", "Error unbinding $eventName", e)
+        } finally {
+            amountUpdatedSubscription = null
+            boundAmountUpdatedEventName = null
+        }
+    }
+
+    private fun unbindLatestTipUpdatedListener(channel: Channel?) {
+        val listener = latestTipUpdatedSubscription ?: return
+        val eventName = boundLatestTipUpdatedEventName ?: return
+        channel ?: return
+        try {
+            channel.unbind(eventName, listener)
+        } catch (e: Exception) {
+            Log.w("PusherService", "Error unbinding $eventName", e)
+        } finally {
+            latestTipUpdatedSubscription = null
+            boundLatestTipUpdatedEventName = null
+        }
+    }
+
+    private fun unbindTipAnimationListener(channel: Channel?) {
+        val listener = tipAnimationSubscription ?: return
+        val eventName = boundTipAnimationEventName ?: return
+        channel ?: return
+        try {
+            channel.unbind(eventName, listener)
+        } catch (e: Exception) {
+            Log.w("PusherService", "Error unbinding $eventName", e)
+        } finally {
+            tipAnimationSubscription = null
+            boundTipAnimationEventName = null
+        }
+    }
+
+    private fun unbindTvScheduleListener(channel: Channel?) {
+        val listener = tvScheduleSubscription ?: return
+        channel ?: return
+        try {
+            channel.unbind(PusherConfig.TV_SCHEDULE_UPDATED_EVENT, listener)
+        } catch (e: Exception) {
+            Log.w("PusherService", "Error unbinding tv-schedule-updated", e)
+        } finally {
+            tvScheduleSubscription = null
+        }
+    }
+
+    private fun unbindPublicVenueListeners(channel: Channel?) {
+        unbindScreenDisplayStateListener(channel)
+        unbindAmountUpdatedListener(channel)
+        unbindLatestTipUpdatedListener(channel)
+    }
+
+    private fun unbindGlobalLiveTvListeners(channel: Channel?) {
+        unbindTipAnimationListener(channel)
+        unbindTvScheduleListener(channel)
+    }
+
+    private fun bindAmountUpdatedListener(channel: Channel) {
+        unbindAmountUpdatedListener(channel)
+        val eventName = amountUpdatedEventName
+        val subscription =
+            object : SubscriptionEventListener {
+                override fun onEvent(event: PusherEvent) {
+                    if (isDisconnecting || publicChannel == null) return
+                    try {
+                        val amountUpdated = json.decodeFromString<AmountUpdatedEvent>(event.data)
+                        val emitted = _amountUpdatedEvents.tryEmit(amountUpdated)
+                        Log.d(
+                            "PusherService",
+                            "📤 amount-updated emitted=$emitted raised=${amountUpdated.amountRaised}",
+                        )
+                    } catch (e: Exception) {
+                        Log.w("PusherService", "⚠️ Malformed $eventName payload ignored", e)
+                    }
+                }
+            }
+        channel.bind(eventName, subscription)
+        amountUpdatedSubscription = subscription
+        boundAmountUpdatedEventName = eventName
+        Log.d("PusherService", "✅ Bound $eventName on ${channel.name}")
+    }
+
+    private fun bindLatestTipUpdatedListener(channel: Channel) {
+        unbindLatestTipUpdatedListener(channel)
+        val eventName = latestTipUpdatedEventName
+        val subscription =
+            object : SubscriptionEventListener {
+                override fun onEvent(event: PusherEvent) {
+                    if (isDisconnecting || publicChannel == null) return
+                    try {
+                        val latest = json.decodeFromString<LatestTipUpdatedEvent>(event.data)
+                        val emitted = _latestTipUpdatedEvents.tryEmit(latest)
+                        Log.d(
+                            "PusherService",
+                            "📤 latest-tip-updated emitted=$emitted amount=${latest.latestTipAmount}",
+                        )
+                    } catch (e: Exception) {
+                        Log.w("PusherService", "⚠️ Malformed $eventName payload ignored", e)
+                    }
+                }
+            }
+        channel.bind(eventName, subscription)
+        latestTipUpdatedSubscription = subscription
+        boundLatestTipUpdatedEventName = eventName
+        Log.d("PusherService", "✅ Bound $eventName on ${channel.name}")
+    }
+
+    private fun bindTipAnimationListener(channel: Channel) {
+        unbindTipAnimationListener(channel)
+        val eventName = tipAnimationEventName
+        val subscription =
+            object : SubscriptionEventListener {
+                override fun onEvent(event: PusherEvent) {
+                    if (isDisconnecting || globalLiveTvChannel == null) return
+                    try {
+                        Log.d("PusherService", "🔔 Received $eventName on ${channel.name}")
+                        val tipAnimation = json.decodeFromString<TipAnimationEvent>(event.data)
+                        val emitted = _tipAnimationEvents.tryEmit(tipAnimation)
+                        Log.d(
+                            "PusherService",
+                            "📤 tip-animation emitted=$emitted tips=${tipAnimation.selectedTips.size} eventId=${tipAnimation.eventId}",
+                        )
+                    } catch (e: Exception) {
+                        Log.w("PusherService", "⚠️ Malformed $eventName payload ignored", e)
+                    }
+                }
+            }
+        channel.bind(eventName, subscription)
+        tipAnimationSubscription = subscription
+        boundTipAnimationEventName = eventName
+        Log.d("PusherService", "✅ Bound $eventName on ${channel.name}")
+    }
+
+    private fun bindPublicVenueListeners(channel: Channel) {
+        bindScreenDisplayStateListener(channel)
+        bindAmountUpdatedListener(channel)
+        bindLatestTipUpdatedListener(channel)
+    }
+
+    private fun bindGlobalLiveTvListeners(channel: Channel) {
+        bindTipAnimationListener(channel)
+        unbindTvScheduleListener(channel)
+        val scheduleSubscription =
+            object : SubscriptionEventListener {
+                override fun onEvent(event: PusherEvent) {
+                    if (globalLiveTvChannel == null) return
+                    try {
+                        val payload =
+                            try {
+                                json.decodeFromString<TvScheduleUpdatedPayload>(event.data)
+                            } catch (_: Exception) {
+                                TvScheduleUpdatedPayload()
+                            }
+                        _tvScheduleUpdated.tryEmit(payload)
+                    } catch (e: Exception) {
+                        Log.w("PusherService", "tv-schedule-updated handler error", e)
+                    }
+                }
+            }
+        channel.bind(PusherConfig.TV_SCHEDULE_UPDATED_EVENT, scheduleSubscription)
+        tvScheduleSubscription = scheduleSubscription
     }
     
     /**
@@ -129,15 +467,38 @@ class PusherService @Inject constructor(
             isDisconnecting = false
             Log.d("PusherService", "   - Confirmed isDisconnecting = false")
             
+            val credentials =
+                configuredCredentials
+                    ?: resolvePusherCredentials(null, null).also { configuredCredentials = it }
+            if (
+                activeCredentialsKey != null &&
+                    (activeCredentialsKey != credentials.apiKey ||
+                        activeCredentialsCluster != credentials.cluster)
+            ) {
+                Log.w("PusherService", "⚠️ Pusher credentials changed — recreating client")
+                forceDestroy()
+            }
+            Log.d(
+                "PusherService",
+                "🔑 Using Pusher credentials: ${formatPusherCredentialDiagnostic(credentials)}",
+            )
+
             val options = PusherOptions()
-            options.setCluster(PusherConfig.CLUSTER)
+            options.setCluster(credentials.cluster)
             
             options.setAuthorizer(
-                PusherHttpAuthorizer(httpClient) { eventCodeForAuth },
+                PusherHttpAuthorizer(
+                    httpClient = httpClient,
+                    sessionStore = sessionStore,
+                    sessionExpiryHandler = sessionExpiryHandler,
+                    eventCodeProvider = { eventCodeForAuth },
+                ),
             )
             Log.d("PusherService", "🔐 Server-side Pusher auth via /api/v1/tv-app/pusher/auth")
             
-            pusher = Pusher(PusherConfig.API_KEY, options)
+            pusher = Pusher(credentials.apiKey, options)
+            activeCredentialsKey = credentials.apiKey
+            activeCredentialsCluster = credentials.cluster
             pusher?.connect(object : ConnectionEventListener {
                 override fun onConnectionStateChange(change: ConnectionStateChange) {
                     // CRITICAL: Don't process callbacks if we're disconnecting
@@ -222,6 +583,7 @@ class PusherService @Inject constructor(
                 
                 try {
                     publicChannel = pusherInstance.subscribe(channelName)
+                    bindPublicVenueListeners(publicChannel!!)
                     Log.d("PusherService", "✅ Subscribed to public channel: $channelName")
                     true
                 } catch (e: IllegalArgumentException) {
@@ -259,6 +621,7 @@ class PusherService @Inject constructor(
                 }
                 globalLiveTvChannel =
                     pusherInstance.subscribe(PusherConfig.GLOBAL_LIVE_TV_CHANNEL)
+                bindGlobalLiveTvListeners(globalLiveTvChannel!!)
                 Log.d(
                     "PusherService",
                     "✅ Subscribed to ${PusherConfig.GLOBAL_LIVE_TV_CHANNEL}",
@@ -339,6 +702,30 @@ class PusherService @Inject constructor(
     }
     
     /**
+     * After local session invalidation, drop venue private-channel subscription only.
+     * Public venue channels and [PusherConfig.GLOBAL_LIVE_TV_CHANNEL] stay subscribed so
+     * anonymous/global LIVE TV realtime hints can still flow until the next reconnect cycle.
+     */
+    private suspend fun dropAuthenticatedPrivateChannelSubscription() {
+        pusherMutex.withLock {
+            val pusherInstance = pusher ?: return@withLock
+            privateChannel?.let { channel ->
+                try {
+                    pusherInstance.unsubscribe(channel.name)
+                    Log.d(
+                        "PusherService",
+                        "🔐 Dropped private channel after session cleared: ${channel.name}",
+                    )
+                } catch (e: Exception) {
+                    Log.w("PusherService", "Error dropping private channel after session clear", e)
+                }
+                privateChannel = null
+            }
+            eventCodeForAuth = null
+        }
+    }
+
+    /**
      * Complete instance destruction for corrupted state recovery.
      * Use when Pusher instance needs to be completely recreated.
      */
@@ -346,9 +733,12 @@ class PusherService @Inject constructor(
         try {
             Log.d("PusherService", "💥 Force destroying Pusher instance")
             
-            // Clear channel references
+            unbindPublicVenueListeners(publicChannel)
+            unbindGlobalLiveTvListeners(globalLiveTvChannel)
+            unbindCommunityDisplayUpdatedListener(communityDisplayChannel)
             publicChannel = null
             privateChannel = null
+            communityDisplayChannel = null
             
             // Don't call disconnect() - just null out the instance
             // Garbage collection will handle cleanup
@@ -399,8 +789,12 @@ class PusherService @Inject constructor(
             
             // Clear channel references FIRST to prevent flows from accessing them
             Log.d("PusherService", "   [STEP 2] Clearing channel references...")
+            unbindPublicVenueListeners(pubChannel)
+            unbindGlobalLiveTvListeners(globalLiveTvChannel)
+            unbindCommunityDisplayUpdatedListener(communityDisplayChannel)
             publicChannel = null
             privateChannel = null
+            communityDisplayChannel = null
             Log.d("PusherService", "   [STEP 2] ✅ Channel references cleared")
             
             pusherInstance?.let {
@@ -449,6 +843,7 @@ class PusherService @Inject constructor(
             publicChannel = null
             privateChannel = null
             globalLiveTvChannel = null
+            communityDisplayChannel = null
             
             // CRITICAL: Always null out the Pusher instance to force fresh creation on next initialize
             // This prevents issues with trying to reuse a Pusher instance that's still disconnecting
@@ -466,215 +861,12 @@ class PusherService @Inject constructor(
     /**
      * Invalidation hints for global TV schedule — refresh via GET /api/v1/tv-app/schedule.
      */
-    fun observeTvScheduleUpdated(): Flow<TvScheduleUpdatedPayload> = callbackFlow {
-        var channel: Channel? = null
-        var attempts = 0
-        while (channel == null && attempts < 20) {
-            channel = globalLiveTvChannel
-            if (channel == null) {
-                delay(100)
-                attempts++
-            }
-        }
-        val finalChannel =
-            channel ?: run {
-                Log.e("PusherService", "global-live-tv not available for tv-schedule-updated")
-                close()
-                return@callbackFlow
-            }
-        val subscription =
-            object : SubscriptionEventListener {
-                override fun onEvent(event: PusherEvent) {
-                    try {
-                        if (globalLiveTvChannel == null) return
-                        val payload =
-                            try {
-                                json.decodeFromString<TvScheduleUpdatedPayload>(event.data)
-                            } catch (_: Exception) {
-                                TvScheduleUpdatedPayload()
-                            }
-                        trySend(payload)
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.e("PusherService", "Error handling tv-schedule-updated", e)
-                    }
-                }
-            }
-        finalChannel.bind(PusherConfig.TV_SCHEDULE_UPDATED_EVENT, subscription)
-        Log.d(
-            "PusherService",
-            "✅ Bound ${PusherConfig.TV_SCHEDULE_UPDATED_EVENT} on ${PusherConfig.GLOBAL_LIVE_TV_CHANNEL}",
-        )
-        awaitClose {
-            try {
-                val current = globalLiveTvChannel
-                if (current != null && finalChannel == current) {
-                    finalChannel.unbind(PusherConfig.TV_SCHEDULE_UPDATED_EVENT, subscription)
-                }
-            } catch (e: Exception) {
-                Log.w("PusherService", "Error unbinding tv-schedule-updated", e)
-            }
-        }
-    }
+    fun observeTvScheduleUpdated(): Flow<TvScheduleUpdatedPayload> =
+        _tvScheduleUpdated.asSharedFlow()
 
-    /**
-     * Creates a Flow stream for tip-animation events.
-     * These events come from the public channel.
-     * 
-     * @return Flow of TipAnimationEvent
-     */
-    fun observeTipAnimation(): Flow<TipAnimationEvent> = callbackFlow {
-        var channel: Channel? = null
-        var attempts = 0
-        while (channel == null && attempts < 20) {
-            channel = globalLiveTvChannel
-            if (channel == null) {
-                kotlinx.coroutines.delay(100)
-                attempts++
-            }
-        }
-        
-        val finalChannel = channel ?: run {
-            Log.e("PusherService", "global-live-tv channel not available after waiting")
-            close()
-            return@callbackFlow
-        }
-        
-        val subscription = object : SubscriptionEventListener {
-            override fun onEvent(event: PusherEvent) {
-                try {
-                    if (globalLiveTvChannel == null) {
-                        Log.d("PusherService", "⚠️ global-live-tv null, ignoring tip-animation")
-                        return
-                    }
-                    Log.d("PusherService", "🔔 Received tip-animation on global-live-tv")
-                    Log.d("PusherService", "Raw event data: ${event.data}")
-                    Log.d("PusherService", "Event name: ${event.eventName}")
-                    
-                    // Try to parse the event
-                    val tipAnimation = json.decodeFromString<TipAnimationEvent>(event.data)
-                    Log.d("PusherService", "✅ Successfully parsed tip-animation: ${tipAnimation.selectedTips.size} tips")
-                    Log.d("PusherService", "Tip names: ${tipAnimation.selectedTips}")
-                    Log.d("PusherService", "Amount: ${tipAnimation.amount}, Sender: ${tipAnimation.sender}")
-                    
-                    // Create a formatted JSON string for display
-                    val jsonDisplay = """
-                        {
-                          "selectedTips": [${tipAnimation.selectedTips.joinToString(", ") { "\"$it\"" }}],
-                          "amount": ${tipAnimation.amount},
-                          "sender": "${tipAnimation.sender}"
-                        }
-                    """.trimIndent()
-                    
-                    // Store raw JSON in a way that can be accessed by ViewModel
-                    // We'll pass it through the event or use a different approach
-                    Log.d("PusherService", "📋 JSON Payload:\n$jsonDisplay")
-                    
-                    // Send to flow
-                    val sent = trySend(tipAnimation)
-                    if (sent.isSuccess) {
-                        Log.d("PusherService", "✅ Sent tip-animation to flow")
-                    } else {
-                        Log.e("PusherService", "❌ Failed to send tip-animation to flow: ${sent.exceptionOrNull()}")
-                    }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    // Cancellation is expected when disconnecting - don't log as error
-                    throw e
-                } catch (e: Exception) {
-                    // Log error but don't crash
-                    Log.e("PusherService", "❌ Error parsing tip-animation event", e)
-                    Log.e("PusherService", "Error message: ${e.message}")
-                    Log.e("PusherService", "Error type: ${e.javaClass.simpleName}")
-                    Log.e("PusherService", "Raw data that failed: ${event.data}")
-                    e.printStackTrace()
-                }
-            }
-        }
-        
-        finalChannel.bind(PusherConfig.TIP_ANIMATION_EVENT, subscription)
-        Log.d(
-            "PusherService",
-            "✅ Bound to ${PusherConfig.TIP_ANIMATION_EVENT} on ${PusherConfig.GLOBAL_LIVE_TV_CHANNEL}",
-        )
-        
-        awaitClose {
-            try {
-                val currentChannel = globalLiveTvChannel
-                if (finalChannel != null && currentChannel != null && finalChannel == currentChannel) {
-                    finalChannel.unbind(PusherConfig.TIP_ANIMATION_EVENT, subscription)
-                    Log.d("PusherService", "✅ Unbound global tip-animation listener")
-                }
-            } catch (e: Exception) {
-                Log.w("PusherService", "Error unbinding tip-animation listener", e)
-            }
-        }
-    }
-    
-    /**
-     * Creates a Flow stream for event-amount-updated events.
-     * These events come from the public channel.
-     * 
-     * @return Flow of AmountUpdatedEvent
-     */
-    fun observeAmountUpdated(): Flow<AmountUpdatedEvent> = callbackFlow {
-        // Wait for public channel to be available (with timeout)
-        var channel: Channel? = null
-        var attempts = 0
-        while (channel == null && attempts < 20) {
-            channel = publicChannel
-            if (channel == null) {
-                kotlinx.coroutines.delay(100)
-                attempts++
-            }
-        }
-        
-        val finalChannel = channel ?: run {
-            Log.e("PusherService", "Public channel not available after waiting")
-            close()
-            return@callbackFlow
-        }
-        
-        val subscription = object : SubscriptionEventListener {
-            override fun onEvent(event: PusherEvent) {
-                try {
-                    // Check if channel is still valid before processing
-                    if (publicChannel == null) {
-                        Log.d("PusherService", "⚠️ Public channel is null, ignoring amount-updated event")
-                        return
-                    }
-                    Log.d("PusherService", "🔔 Received event-amount-updated: ${event.data}")
-                    val amountUpdated = json.decodeFromString<AmountUpdatedEvent>(event.data)
-                    Log.d("PusherService", "✅ Parsed amount-updated: £${amountUpdated.amountRaised}, ${amountUpdated.numOfTips} tips")
-                    trySend(amountUpdated)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    // Cancellation is expected when disconnecting - don't log as error
-                    throw e
-                } catch (e: Exception) {
-                    Log.e("PusherService", "❌ Error parsing amount-updated event", e)
-                    e.printStackTrace()
-                }
-            }
-        }
-        
-        finalChannel.bind("event-amount-updated", subscription)
-        Log.d("PusherService", "✅ Bound to event-amount-updated event - ready to receive events")
-        
-        awaitClose {
-            try {
-                // Only unbind if channel still exists and is valid
-                val currentChannel = publicChannel
-                if (finalChannel != null && currentChannel != null && finalChannel == currentChannel) {
-                    finalChannel.unbind("event-amount-updated", subscription)
-                    Log.d("PusherService", "✅ Unbound event-amount-updated listener")
-                } else {
-                    Log.d("PusherService", "⚠️ Skipping event-amount-updated unbind - channel already disposed")
-                }
-            } catch (e: Exception) {
-                Log.w("PusherService", "Error unbinding event-amount-updated listener", e)
-            }
-        }
-    }
+    fun observeTipAnimation(): Flow<TipAnimationEvent> = _tipAnimationEvents.asSharedFlow()
+
+    fun observeAmountUpdated(): Flow<AmountUpdatedEvent> = _amountUpdatedEvents.asSharedFlow()
     
     /**
      * Creates a Flow stream for `screen-display-state` on the public event channel.
@@ -682,59 +874,9 @@ class PusherService @Inject constructor(
      */
     fun observeScreenDisplayState(
         pusherEventName: String = DEFAULT_SCREEN_DISPLAY_STATE_EVENT,
-    ): Flow<ScreenDisplayStatePayload> = callbackFlow {
-        var channel: Channel? = null
-        var attempts = 0
-        while (channel == null && attempts < 20) {
-            channel = publicChannel
-            if (channel == null) {
-                kotlinx.coroutines.delay(100)
-                attempts++
-            }
-        }
-
-        val finalChannel = channel ?: run {
-            Log.e("PusherService", "Public channel not available for screen-display-state")
-            close()
-            return@callbackFlow
-        }
-
-        val subscription = object : SubscriptionEventListener {
-            override fun onEvent(event: PusherEvent) {
-                try {
-                    if (publicChannel == null) {
-                        Log.d("PusherService", "⚠️ Public channel null, ignoring screen-display-state")
-                        return
-                    }
-                    Log.d("PusherService", "🔔 Received $pusherEventName: ${event.data}")
-                    val payload = parseScreenDisplayStatePayload(event.data)
-                    if (payload == null) {
-                        Log.w("PusherService", "⚠️ Ignoring malformed $pusherEventName payload")
-                        return
-                    }
-                    trySend(payload)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.e("PusherService", "❌ Error handling $pusherEventName", e)
-                }
-            }
-        }
-
-        finalChannel.bind(pusherEventName, subscription)
-        Log.d("PusherService", "✅ Bound to $pusherEventName on public channel")
-
-        awaitClose {
-            try {
-                val currentChannel = publicChannel
-                if (finalChannel != null && currentChannel != null && finalChannel == currentChannel) {
-                    finalChannel.unbind(pusherEventName, subscription)
-                    Log.d("PusherService", "✅ Unbound $pusherEventName listener")
-                }
-            } catch (e: Exception) {
-                Log.w("PusherService", "Error unbinding $pusherEventName listener", e)
-            }
-        }
+    ): Flow<ScreenDisplayStatePayload> {
+        setScreenDisplayStateEventName(pusherEventName)
+        return _screenDisplayStatePayloads.asSharedFlow()
     }
 
     /**
@@ -829,62 +971,72 @@ class PusherService @Inject constructor(
      * 
      * @return Flow of LatestTipUpdatedEvent
      */
-    fun observeLatestTipUpdated(): Flow<LatestTipUpdatedEvent> = callbackFlow {
-        // Wait for public channel to be available (with timeout)
-        var channel: Channel? = null
-        var attempts = 0
-        while (channel == null && attempts < 20) {
-            channel = publicChannel
-            if (channel == null) {
-                kotlinx.coroutines.delay(100)
-                attempts++
+    fun observeLatestTipUpdated(): Flow<LatestTipUpdatedEvent> =
+        _latestTipUpdatedEvents.asSharedFlow()
+
+    suspend fun subscribeToCommunityDisplayChannel(channelName: String): Boolean =
+        pusherMutex.withLock {
+            try {
+                if (isPusherCorrupted) return false
+                pusher?.let { pusherInstance ->
+                    communityDisplayChannel?.let { existing ->
+                        if (existing.name != channelName) {
+                            unbindCommunityDisplayUpdatedListener(existing)
+                            try {
+                                pusherInstance.unsubscribe(existing.name)
+                            } catch (_: Exception) {
+                            }
+                            communityDisplayChannel = null
+                        }
+                    }
+                    communityDisplayChannel = pusherInstance.subscribe(channelName)
+                    bindCommunityDisplayUpdatedListener(communityDisplayChannel!!)
+                    Log.d("PusherService", "✅ Subscribed to community display channel: $channelName")
+                    true
+                } ?: false
+            } catch (e: Exception) {
+                Log.e("PusherService", "Failed to subscribe to community channel", e)
+                false
             }
         }
-        
-        val finalChannel = channel ?: run {
-            Log.e("PusherService", "Public channel not available after waiting")
-            close()
-            return@callbackFlow
+
+    fun observeCommunityDisplayUpdated(): Flow<CommunityDisplayUpdatedPayload> =
+        _communityDisplayUpdatedPayloads.asSharedFlow()
+
+    private fun unbindCommunityDisplayUpdatedListener(channel: Channel?) {
+        val listener = communityDisplayUpdatedSubscription ?: return
+        val eventName = communityDisplayUpdatedEventName
+        channel ?: return
+        try {
+            channel.unbind(eventName, listener)
+        } catch (e: Exception) {
+            Log.w("PusherService", "Error unbinding $eventName on community channel", e)
+        } finally {
+            communityDisplayUpdatedSubscription = null
         }
-        
-        val subscription = object : SubscriptionEventListener {
-            override fun onEvent(event: PusherEvent) {
-                try {
-                    // Check if channel is still valid before processing
-                    if (publicChannel == null) {
-                        Log.d("PusherService", "⚠️ Public channel is null, ignoring latest-tip-updated event")
+    }
+
+    private fun bindCommunityDisplayUpdatedListener(channel: Channel) {
+        unbindCommunityDisplayUpdatedListener(channel)
+        val eventName = communityDisplayUpdatedEventName
+        val subscription =
+            object : SubscriptionEventListener {
+                override fun onEvent(event: PusherEvent) {
+                    if (isDisconnecting || communityDisplayChannel == null) return
+                    val payload = parseCommunityDisplayUpdatedPayload(event.data)
+                    if (payload == null) {
+                        Log.w("PusherService", "⚠️ Malformed $eventName on ${channel.name}")
                         return
                     }
-                    Log.d("PusherService", "🔔 Received latest-tip-updated: ${event.data}")
-                    val latestTipUpdated = json.decodeFromString<LatestTipUpdatedEvent>(event.data)
-                    Log.d("PusherService", "✅ Parsed latest-tip-updated: £${latestTipUpdated.latestTipAmount}")
-                    trySend(latestTipUpdated)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    // Cancellation is expected when disconnecting - don't log as error
-                    throw e
-                } catch (e: Exception) {
-                    Log.e("PusherService", "❌ Error parsing latest-tip-updated event", e)
-                    e.printStackTrace()
+                    val emitted = _communityDisplayUpdatedPayloads.tryEmit(payload)
+                    Log.d(
+                        "PusherService",
+                        "📤 community $eventName emitted=$emitted communityId=${payload.communityId}",
+                    )
                 }
             }
-        }
-        
-        finalChannel.bind("latest-tip-updated", subscription)
-        Log.d("PusherService", "✅ Bound to latest-tip-updated event - ready to receive events")
-        
-        awaitClose {
-            try {
-                // Only unbind if channel still exists and is valid
-                val currentChannel = publicChannel
-                if (finalChannel != null && currentChannel != null && finalChannel == currentChannel) {
-                    finalChannel.unbind("latest-tip-updated", subscription)
-                    Log.d("PusherService", "✅ Unbound latest-tip-updated listener")
-                } else {
-                    Log.d("PusherService", "⚠️ Skipping latest-tip-updated unbind - channel already disposed")
-                }
-            } catch (e: Exception) {
-                Log.w("PusherService", "Error unbinding latest-tip-updated listener", e)
-            }
-        }
+        channel.bind(eventName, subscription)
+        communityDisplayUpdatedSubscription = subscription
+        Log.d("PusherService", "✅ Bound $eventName on ${channel.name}")
     }
 }

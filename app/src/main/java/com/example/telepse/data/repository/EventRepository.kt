@@ -1,13 +1,14 @@
 package com.example.telepse.data.repository
 
 import com.example.telepse.data.model.Event
+import com.example.telepse.data.network.ApiConfig
+import com.example.telepse.data.network.normalizeEventCode
 import com.example.telepse.data.network.parseEventsByCodeResponseBody
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
-import com.example.telepse.data.network.ApiConfig
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -17,11 +18,13 @@ class EventRepository @Inject constructor(
 ) {
     
     /**
-     * Fetches events by event code from the API
+     * Fetches events by event code from the API.
+     * Codes are normalized (trim + locale-independent uppercase) before the path segment.
      */
     suspend fun getEventsByCode(eventCode: String): Result<List<Event>> {
+        val normalized = normalizeEventCode(eventCode)
         return try {
-            val response = httpClient.get("${ApiConfig.BASE_URL}/api/v1/events/code/$eventCode") {
+            val response = httpClient.get("${ApiConfig.BASE_URL}/api/v1/events/code/$normalized") {
                 // Add any headers if needed
             }
             
@@ -31,7 +34,7 @@ class EventRepository @Inject constructor(
                     Result.success(events)
                 }
                 HttpStatusCode.NotFound -> {
-                    Result.failure(Exception("No events found for code: $eventCode"))
+                    Result.failure(Exception("No events found for code: $normalized"))
                 }
                 else -> {
                     Result.failure(Exception("Failed to fetch events: ${response.status}"))

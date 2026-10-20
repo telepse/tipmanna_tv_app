@@ -73,6 +73,7 @@ class WebViewYouTubePlayerAdapter : YouTubePlayerAdapter {
             },
         )
         webView.addJavascriptInterface(bridge!!, "TipmannaBridge")
+        flushPendingBootstrapIfNeeded()
     }
 
     override fun load(videoId: String, startSeconds: Float) {
@@ -80,7 +81,7 @@ class WebViewYouTubePlayerAdapter : YouTubePlayerAdapter {
             pendingVideoId = videoId
             pendingStart = startSeconds
             pendingCue = false
-            bootstrapWebView(videoId, autoplay = true, mute = true, startSeconds)
+            flushPendingBootstrapIfNeeded()
             return
         }
         evalJs("loadVideoById('${escapeJs(videoId)}', ${startSeconds.toInt()});")
@@ -92,7 +93,7 @@ class WebViewYouTubePlayerAdapter : YouTubePlayerAdapter {
             pendingVideoId = videoId
             pendingStart = startSeconds
             pendingCue = true
-            bootstrapWebView(videoId, autoplay = false, mute = true, startSeconds)
+            flushPendingBootstrapIfNeeded()
             return
         }
         evalJs("cueVideoById('${escapeJs(videoId)}', ${startSeconds.toInt()});")
@@ -166,6 +167,9 @@ class WebViewYouTubePlayerAdapter : YouTubePlayerAdapter {
         webView = null
         bridge = null
         playerReady = false
+        pendingVideoId = null
+        pendingStart = 0f
+        pendingCue = false
         lastState = YouTubePlayerState.UNKNOWN
     }
 
@@ -181,15 +185,22 @@ class WebViewYouTubePlayerAdapter : YouTubePlayerAdapter {
         attachWebView(webView)
     }
 
+    private fun flushPendingBootstrapIfNeeded() {
+        val id = pendingVideoId ?: return
+        if (webView == null) return
+        bootstrapWebView(id, autoplay = !pendingCue, mute = true, startSeconds = pendingStart)
+    }
+
     private fun bootstrapWebView(
         videoId: String,
         autoplay: Boolean,
         mute: Boolean,
         startSeconds: Float,
     ) {
+        val wv = webView ?: return
         val html = YoutubeIframeHtml.build(videoId, autoplay, mute, startSeconds)
         emitMetric("bootstrap_html", videoId)
-        webView?.loadDataWithBaseURL(
+        wv.loadDataWithBaseURL(
             YoutubeIframeHtml.EMBED_ORIGIN,
             html,
             "text/html",

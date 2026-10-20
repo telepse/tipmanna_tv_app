@@ -2,6 +2,8 @@ package com.example.telepse.data.repository
 
 import android.util.Log
 import com.example.telepse.data.auth.SessionStore
+import com.example.telepse.data.auth.TipperSessionSnapshot
+import kotlinx.coroutines.flow.StateFlow
 import com.example.telepse.data.model.LoginTipperRequest
 import com.example.telepse.data.model.LoginTipperResponse
 import com.example.telepse.data.model.VerifyCodeRequest
@@ -24,7 +26,7 @@ import javax.inject.Singleton
 class AuthRepository @Inject constructor(
     private val httpClient: HttpClient,
     private val sessionStore: SessionStore,
-) {
+) : TipperSession {
     suspend fun requestLoginCode(email: String): Result<Unit> =
         runAuthCall(operation = OP_LOGIN_TIPPER) {
             val response =
@@ -65,13 +67,15 @@ class AuthRepository @Inject constructor(
             sessionStore.saveSession(token, email)
         }
 
-    fun signOut() {
+    override fun signOut() {
         sessionStore.clear()
     }
 
     fun isLoggedIn(): Boolean = sessionStore.isLoggedIn()
 
     fun currentEmail(): String? = sessionStore.tipperEmail()
+
+    val sessionSnapshot: StateFlow<TipperSessionSnapshot> get() = sessionStore.snapshot
 
     private suspend fun <T> runAuthCall(operation: String, block: suspend () -> T): Result<T> =
         try {

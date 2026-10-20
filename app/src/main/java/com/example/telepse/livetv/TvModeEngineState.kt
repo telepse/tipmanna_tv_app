@@ -22,4 +22,14 @@ data class TvModeEngineState(
     val playerState: YouTubePlayerState = YouTubePlayerState.UNKNOWN,
     val playerReady: Boolean = false,
     val isActive: Boolean = false,
+    /** Best-effort position from player CurrentTime events (for seek). */
+    val playbackPositionSeconds: Float = 0f,
+    val lastScheduleRefreshSucceeded: Boolean = false,
+    /**
+     * Background poll, debounced/Pusher/player-ended refresh, and error-recovery retries are paused
+     * after confirmed authenticated session expiry. Cleared only by a successful schedule fetch
+     * (typically via explicit [com.example.telepse.livetv.TvModeEngine.refreshSchedule]).
+     * Survives [com.example.telepse.livetv.TvModeEngine.stop]/[com.example.telepse.livetv.TvModeEngine.start].
+     */
+    val scheduleBackgroundRefreshSuspended: Boolean = false,
 )

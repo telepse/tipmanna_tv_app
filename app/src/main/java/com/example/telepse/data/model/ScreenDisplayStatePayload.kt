@@ -1,12 +1,14 @@
 package com.example.telepse.data.model
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * Payload for `screen-display-state` (public) and `screen-settings-updated` (private).
  * Mirrors `ScreenDisplayBroadcastPayload` in `backend/src/utils/screen-broadcast.util.ts`.
- * Fields are optional at parse time so partial JSON does not fail deserialization;
- * [com.example.telepse.data.realtime.ScreenDisplayStateApplier] applies only present values.
+ *
+ * Scalar fields are optional so partial JSON does not fail. [Transient] presence flags
+ * distinguish missing keys from explicit null for nullable strings/lists (web overlay sync).
  */
 @Serializable
 data class ScreenDisplayStatePayload(
@@ -26,4 +28,11 @@ data class ScreenDisplayStatePayload(
     val moneyFor: String? = null,
     val tipUsageDisclosure: List<TipUsageDisclosure>? = null,
     val performers: List<Performer>? = null,
+    @Transient val eventBackgroundPresent: Boolean = false,
+    @Transient val backgroundTypePresent: Boolean = false,
+    @Transient val hideProgressBarAmountPresent: Boolean = false,
+    @Transient val showLatestAmountPresent: Boolean = false,
+    @Transient val moneyForPresent: Boolean = false,
+    @Transient val tipUsageDisclosurePresent: Boolean = false,
+    @Transient val performersPresent: Boolean = false,
 )

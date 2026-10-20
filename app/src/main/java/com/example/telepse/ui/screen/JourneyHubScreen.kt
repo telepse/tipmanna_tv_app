@@ -44,8 +44,10 @@ fun JourneyHubScreen(
     onScreenDisplay: () -> Unit,
     onLiveTv: () -> Unit,
     onExplore: () -> Unit,
+    onTipsWallet: () -> Unit,
     onSignIn: () -> Unit,
     onYouTubeSpike: () -> Unit,
+    onCommunityRoom: () -> Unit,
     viewModel: JourneyHubViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -56,8 +58,10 @@ fun JourneyHubScreen(
         remember(uiState.loggedIn) {
             buildList {
                 add("Event screen display")
+                add("Community room display")
                 add("Watch LIVE TV")
                 add("Explore")
+                add("Tips & wallet")
                 add(if (uiState.loggedIn) "Sign out" else "Sign in (tipper)")
                 add("YouTube spike (QA)")
             }
@@ -69,8 +73,10 @@ fun JourneyHubScreen(
         remember(uiState.loggedIn) {
             buildList {
                 add(onScreenDisplay)
+                add(onCommunityRoom)
                 add(onLiveTv)
                 add(onExplore)
+                add(onTipsWallet)
                 add(if (uiState.loggedIn) ({ viewModel.signOut() }) else onSignIn)
                 add(onYouTubeSpike)
             }

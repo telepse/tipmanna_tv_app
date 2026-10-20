@@ -79,6 +79,49 @@ fun getBackgroundResource(backgroundId: String?): Int? {
  * @param eventBackground The eventBackground field from the event (e.g., "/default.png")
  * @return The R.raw resource ID for the background, or the default fallback if not found
  */
+sealed class EventBackgroundMedia {
+    data class LocalRaw(val resourceId: Int) : EventBackgroundMedia()
+    data class RemoteImage(val url: String) : EventBackgroundMedia()
+}
+
+private val REMOTE_BACKGROUND_REGEX =
+    Regex("^https?://", RegexOption.IGNORE_CASE)
+
+fun resolveRemoteBackgroundUrl(eventBackground: String?): String? {
+    val trimmed = eventBackground?.trim().orEmpty()
+    if (trimmed.isEmpty()) return null
+    return trimmed.takeIf { REMOTE_BACKGROUND_REGEX.containsMatchIn(it) }
+}
+
+/**
+ * Venue contract: built-in `/default.png`, `/islamic.png`, `/gaming.png` map to local raw video;
+ * http(s) URLs (community room / future CDN) use remote image rendering.
+ */
+fun resolveEventBackgroundMedia(
+    eventBackground: String? = null,
+    backgroundType: String? = null,
+): EventBackgroundMedia {
+    resolveRemoteBackgroundUrl(eventBackground)?.let { url ->
+        return EventBackgroundMedia.RemoteImage(url)
+    }
+    val resourceId = getEventBackgroundResource(backgroundType, eventBackground)
+    return EventBackgroundMedia.LocalRaw(resourceId)
+}
+
+/**
+ * Community room: `roomBackground` may be a remote URL; `roomBackgroundType` selects built-in raw video.
+ */
+fun resolveCommunityRoomBackgroundMedia(
+    roomBackground: String? = null,
+    roomBackgroundType: String? = null,
+): EventBackgroundMedia {
+    resolveRemoteBackgroundUrl(roomBackground)?.let { url ->
+        return EventBackgroundMedia.RemoteImage(url)
+    }
+    val resourceId = getEventBackgroundResource(roomBackgroundType, roomBackground)
+    return EventBackgroundMedia.LocalRaw(resourceId)
+}
+
 fun getEventBackgroundResource(
     backgroundType: String? = null,
     eventBackground: String? = null

@@ -11,6 +11,33 @@ data class LiveScheduleTarget(
 )
 
 object LiveScheduleTargetResolver {
+    fun resolveAtIndex(
+        schedule: TvScheduleResponse,
+        index: Int,
+        startSeconds: Float,
+    ): Result<LiveScheduleTarget> {
+        if (schedule.items.isEmpty()) {
+            return Result.failure(IllegalStateException(schedule.message ?: "Schedule has no items"))
+        }
+        if (index !in schedule.items.indices) {
+            return Result.failure(IllegalStateException("Index $index out of range"))
+        }
+        val url =
+            schedule.items[index].channel?.url
+                ?: return Result.failure(IllegalStateException("No channel URL at index $index"))
+        val videoId =
+            YoutubeVideoIdUtil.fromUrl(url)
+                ?: return Result.failure(IllegalStateException("Unplayable URL at index $index"))
+        return Result.success(
+            LiveScheduleTarget(
+                videoId = videoId,
+                startSeconds = startSeconds,
+                scheduleIndex = index,
+                scheduleState = schedule.scheduleState,
+            ),
+        )
+    }
+
     fun resolve(schedule: TvScheduleResponse): Result<LiveScheduleTarget> {
         if (schedule.items.isEmpty()) {
             return Result.failure(

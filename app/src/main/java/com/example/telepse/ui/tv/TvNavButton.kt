@@ -1,6 +1,7 @@
 package com.example.telepse.ui.tv
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -10,7 +11,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.animation.animateColorAsState
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -45,6 +52,30 @@ fun TvNavButton(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val shape = RoundedCornerShape(10.dp)
+    var focused by remember { mutableStateOf(false) }
+    var activated by remember { mutableStateOf(false) }
+    LaunchedEffect(activated) {
+        if (activated) {
+            delay(220)
+            activated = false
+        }
+    }
+    val borderColor by animateColorAsState(
+        when {
+            activated -> Color.White
+            focused -> TvAppColors.FocusRing
+            else -> TvAppColors.ButtonIdleBorder
+        },
+        label = "navBorder",
+    )
+    val backgroundColor by animateColorAsState(
+        when {
+            activated -> Color(0xFF2A4A5A)
+            focused -> Color(0xFF252532)
+            else -> if (enabled) Color(0xFF1E1E28) else Color(0xFF14141A)
+        },
+        label = "navBg",
+    )
     var focusModifier =
         Modifier
             .fillMaxWidth(0.62f)
@@ -53,12 +84,11 @@ fun TvNavButton(
     if (focusRequester != null) {
         focusModifier = focusModifier.focusRequester(focusRequester)
     }
-    if (onFocused != null) {
-        focusModifier =
-            focusModifier.onFocusChanged { state ->
-                if (state.isFocused) onFocused()
-            }
-    }
+    focusModifier =
+        focusModifier.onFocusChanged { state ->
+            focused = state.isFocused
+            if (state.isFocused) onFocused?.invoke()
+        }
     Box(
         modifier =
             focusModifier
@@ -76,6 +106,7 @@ fun TvNavButton(
                         Key.Enter,
                         Key.NumPadEnter,
                         -> {
+                            activated = true
                             onClick()
                             true
                         }
@@ -83,11 +114,12 @@ fun TvNavButton(
                     }
                 }
                 .semantics(mergeDescendants = true) { role = Role.Button }
-                .tvFocusRing(cornerRadiusDp = 10)
-                .background(
-                    color = if (enabled) Color(0xFF1E1E28) else Color(0xFF14141A),
+                .border(
+                    width = if (focused || activated) 4.dp else 2.dp,
+                    color = borderColor,
                     shape = shape,
-                ),
+                )
+                .background(color = backgroundColor, shape = shape),
         contentAlignment = Alignment.CenterStart,
     ) {
         Text(
