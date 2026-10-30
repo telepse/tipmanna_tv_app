@@ -44,15 +44,18 @@ class FakeTvScheduleSource : TvScheduleSource {
             videoIds: List<String>,
             liveIndex: Int,
             offsetSeconds: Int = 10,
+            eventIds: List<String?> = emptyList(),
         ): TvScheduleResponse {
             val items =
                 videoIds.mapIndexed { idx, videoId ->
+                    val eventId = eventIds.getOrNull(idx)
                     TvScheduleItem(
                         id = "row-$idx",
                         channel =
                             TvScheduleChannel(
                                 url = "https://www.youtube.com/watch?v=$videoId",
                                 title = "Test $idx",
+                                eventId = eventId,
                             ),
                     )
                 }

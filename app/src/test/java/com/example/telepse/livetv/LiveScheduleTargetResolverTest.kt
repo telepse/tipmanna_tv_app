@@ -14,6 +14,20 @@ class LiveScheduleTargetResolverTest {
         assertEquals("Ffs0YHm2jks", target.videoId)
         assertEquals(42f, target.startSeconds)
         assertEquals(0, target.scheduleIndex)
+        assertEquals("", target.eventId)
+    }
+
+    @Test
+    fun resolve_includesChannelEventId() {
+        val schedule =
+            FakeTvScheduleSource.sampleScheduleWithItems(
+                videoIds = listOf("Ffs0YHm2jks"),
+                liveIndex = 0,
+                offsetSeconds = 3,
+                eventIds = listOf("evt-live-1"),
+            )
+        val target = LiveScheduleTargetResolver.resolve(schedule).getOrThrow()
+        assertEquals("evt-live-1", target.eventId)
     }
 
     @Test

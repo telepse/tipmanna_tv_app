@@ -8,6 +8,8 @@ import com.example.telepse.analytics.TvAnalyticsEventFactory
 import com.example.telepse.analytics.TvAnalyticsClipMode
 import com.example.telepse.analytics.TvAnalyticsSurfaces
 import com.example.telepse.data.auth.SessionExpiryHandler
+import com.example.telepse.data.auth.SessionStore
+import com.example.telepse.data.repository.WalletOperations
 import com.example.telepse.livetv.LiveScheduleScope
 import com.example.telepse.livetv.TvModeEngine
 import com.example.telepse.livetv.TvModeEnginePhase
@@ -16,6 +18,8 @@ import com.example.telepse.livetv.TvScheduleRefreshSignals
 import com.example.telepse.livetv.TvScheduleSource
 import com.example.telepse.player.WebViewYouTubePlayerAdapter
 import com.example.telepse.player.YouTubePlayerState
+import com.example.telepse.tips.LiveTvTipCoordinator
+import com.example.telepse.tips.LiveTvTipUiState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -32,6 +36,7 @@ data class LiveTvUiState(
     val scheduleScope: LiveScheduleScope = LiveScheduleScope.Global,
     val isMuted: Boolean = true,
     val showSchedulePanel: Boolean = false,
+    val tip: LiveTvTipUiState = LiveTvTipUiState(),
     val userStatusLine: String = "",
 )
 
@@ -41,6 +46,8 @@ class LiveTvFoundationViewModel @Inject constructor(
     refreshSignals: TvScheduleRefreshSignals,
     sessionExpiryHandler: SessionExpiryHandler,
     private val analytics: TvAnalyticsClient,
+    walletOperations: WalletOperations,
+    private val sessionStore: SessionStore,
 ) : ViewModel() {
 
     // Must be initialized before [init]: viewModelScope uses Main.immediate, so the analytics
@@ -53,6 +60,13 @@ class LiveTvFoundationViewModel @Inject constructor(
             scope = viewModelScope,
             refreshSignals = refreshSignals,
             onAuthenticatedSessionFailure = { sessionExpiryHandler.invalidateSessionIfNeeded(it) },
+        )
+
+    private val tipCoordinator =
+        LiveTvTipCoordinator(
+            walletOperations = walletOperations,
+            isLoggedIn = { sessionStore.isLoggedIn() },
+            scope = viewModelScope,
         )
 
     init {
@@ -70,6 +84,19 @@ class LiveTvFoundationViewModel @Inject constructor(
                     }
                 }
         }
+        viewModelScope.launch {
+            engine.state
+                .map { it.target?.eventId.orEmpty() }
+                .distinctUntilChanged()
+                .collect { eventId ->
+                    tipCoordinator.onProgrammeEventId(eventId)
+                }
+        }
+        viewModelScope.launch {
+            sessionStore.snapshot.collect {
+                tipCoordinator.refreshAuthCheckout()
+            }
+        }
     }
 
     private val isMuted = MutableStateFlow(true)
@@ -83,15 +110,22 @@ class LiveTvFoundationViewModel @Inject constructor(
     private var surfaceGeneration = 0
 
     val uiState: StateFlow<LiveTvUiState> =
-        combine(engine.state, isMuted, showSchedulePanel) { engineState, muted, scheduleOpen ->
+        combine(
+            engine.state,
+            isMuted,
+            showSchedulePanel,
+            tipCoordinator.state,
+        ) { engineState, muted, scheduleOpen, tip ->
             LiveTvUiState(
                 engine = engineState,
                 scheduleScope = LiveScheduleScope.Global,
                 isMuted = muted,
                 showSchedulePanel = scheduleOpen,
+                tip = tip,
                 userStatusLine = buildUserStatusLine(engineState),
             )
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LiveTvUiState())
+        // Eager: tip cart/strip must stay synced without depending on Compose collectors.
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, LiveTvUiState())
 
     val webViewAttachKey: Int get() = surfaceGeneration
 
@@ -101,6 +135,7 @@ class LiveTvFoundationViewModel @Inject constructor(
 
     fun onLeave() {
         showSchedulePanel.value = false
+        tipCoordinator.reset()
         engine.stop()
     }
 
@@ -114,6 +149,7 @@ class LiveTvFoundationViewModel @Inject constructor(
 
     fun playScheduleIndex(index: Int) {
         showSchedulePanel.value = false
+        tipCoordinator.closeDrawer()
         engine.playScheduleIndex(index)
     }
 
@@ -140,7 +176,48 @@ class LiveTvFoundationViewModel @Inject constructor(
     }
 
     fun toggleSchedulePanel() {
+        if (!showSchedulePanel.value) {
+            tipCoordinator.closeDrawer()
+        }
         showSchedulePanel.value = !showSchedulePanel.value
+    }
+
+    fun toggleTipStrip() {
+        tipCoordinator.toggleStrip()
+    }
+
+    fun openTipDrawer() {
+        showSchedulePanel.value = false
+        tipCoordinator.openDrawer()
+    }
+
+    fun closeTipDrawer() {
+        tipCoordinator.closeDrawer()
+    }
+
+    fun selectTipCharacter(characterId: String) {
+        showSchedulePanel.value = false
+        tipCoordinator.selectCharacter(characterId)
+    }
+
+    fun incrementTipQuantity(characterId: String) {
+        tipCoordinator.increment(characterId)
+    }
+
+    fun decrementTipQuantity(characterId: String) {
+        tipCoordinator.decrement(characterId)
+    }
+
+    fun removeTipFromCart(characterId: String) {
+        tipCoordinator.removeFromCart(characterId)
+    }
+
+    fun clearTipCart() {
+        tipCoordinator.clearCart()
+    }
+
+    fun refreshTipCatalog() {
+        tipCoordinator.refreshCatalog()
     }
 
     fun play() {
@@ -225,6 +302,7 @@ class LiveTvFoundationViewModel @Inject constructor(
 
     override fun onCleared() {
         analytics.flushAsync()
+        tipCoordinator.reset()
         engine.dispose()
         super.onCleared()
     }

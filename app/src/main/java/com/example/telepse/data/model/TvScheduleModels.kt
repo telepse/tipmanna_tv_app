@@ -16,12 +16,16 @@ data class TvScheduleResponse(
 data class TvScheduleItem(
     val id: String? = null,
     val channel: TvScheduleChannel? = null,
+    /** Fallback tip event when [TvScheduleChannel.eventId] is absent (matches web). */
+    val defaultChannelEventId: String? = null,
 )
 
 @Serializable
 data class TvScheduleChannel(
     val url: String? = null,
     val title: String? = null,
+    /** Authoritative LIVE tip catalog event id from schedule channel. */
+    val eventId: String? = null,
 )
 
 @Serializable

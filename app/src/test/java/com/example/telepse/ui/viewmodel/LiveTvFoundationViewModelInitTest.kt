@@ -1,10 +1,14 @@
 package com.example.telepse.ui.viewmodel
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.example.telepse.analytics.TvAnalyticsClient
 import com.example.telepse.data.auth.SessionExpiryHandler
+import com.example.telepse.data.auth.SessionStore
 import com.example.telepse.data.repository.TipperSession
 import com.example.telepse.livetv.FakeTvScheduleRefreshSignals
 import com.example.telepse.livetv.FakeTvScheduleSource
+import com.example.telepse.tips.FakeWalletOperations
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respondOk
@@ -52,13 +56,7 @@ class LiveTvFoundationViewModelInitTest {
         runTest {
             // UnconfinedTestDispatcher + setMain mimics Main.immediate: init's launch runs
             // during construction. This would NPE if engine were still uninitialized.
-            val vm =
-                LiveTvFoundationViewModel(
-                    scheduleSource = FakeTvScheduleSource(),
-                    refreshSignals = FakeTvScheduleRefreshSignals(),
-                    sessionExpiryHandler = SessionExpiryHandler(NoOpTipperSession()),
-                    analytics = TvAnalyticsClient(HttpClient(MockEngine { respondOk() })),
-                )
+            val vm = createViewModel()
             runCurrent()
 
             assertNotNull(vm.uiState)
@@ -72,13 +70,7 @@ class LiveTvFoundationViewModelInitTest {
     @Test
     fun onEnter_andOnLeave_doNotCrashAfterFixedInitOrder() =
         runTest {
-            val vm =
-                LiveTvFoundationViewModel(
-                    scheduleSource = FakeTvScheduleSource(),
-                    refreshSignals = FakeTvScheduleRefreshSignals(),
-                    sessionExpiryHandler = SessionExpiryHandler(NoOpTipperSession()),
-                    analytics = TvAnalyticsClient(HttpClient(MockEngine { respondOk() })),
-                )
+            val vm = createViewModel()
             runCurrent()
 
             vm.onEnter()
@@ -90,6 +82,18 @@ class LiveTvFoundationViewModelInitTest {
 
             assertNotNull(vm.uiState.value)
         }
+
+    private fun createViewModel(): LiveTvFoundationViewModel {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        return LiveTvFoundationViewModel(
+            scheduleSource = FakeTvScheduleSource(),
+            refreshSignals = FakeTvScheduleRefreshSignals(),
+            sessionExpiryHandler = SessionExpiryHandler(NoOpTipperSession()),
+            analytics = TvAnalyticsClient(HttpClient(MockEngine { respondOk() })),
+            walletOperations = FakeWalletOperations(),
+            sessionStore = SessionStore.createPlainForUnitTests(context),
+        )
+    }
 
     private class NoOpTipperSession : TipperSession {
         override fun signOut() {}

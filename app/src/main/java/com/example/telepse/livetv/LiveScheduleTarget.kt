@@ -8,6 +8,8 @@ data class LiveScheduleTarget(
     val startSeconds: Float,
     val scheduleIndex: Int,
     val scheduleState: String?,
+    /** Tip catalog event id for this programme; empty when schedule omits mapping. */
+    val eventId: String = "",
 )
 
 object LiveScheduleTargetResolver {
@@ -22,8 +24,9 @@ object LiveScheduleTargetResolver {
         if (index !in schedule.items.indices) {
             return Result.failure(IllegalStateException("Index $index out of range"))
         }
+        val item = schedule.items[index]
         val url =
-            schedule.items[index].channel?.url
+            item.channel?.url
                 ?: return Result.failure(IllegalStateException("No channel URL at index $index"))
         val videoId =
             YoutubeVideoIdUtil.fromUrl(url)
@@ -34,6 +37,7 @@ object LiveScheduleTargetResolver {
                 startSeconds = startSeconds,
                 scheduleIndex = index,
                 scheduleState = schedule.scheduleState,
+                eventId = ResolveTvScheduleEventId.resolve(item),
             ),
         )
     }
@@ -52,8 +56,9 @@ object LiveScheduleTargetResolver {
                 IllegalStateException("Live index $index out of range (${schedule.items.size} items)"),
             )
         }
+        val item = schedule.items[index]
         val url =
-            schedule.items[index].channel?.url
+            item.channel?.url
                 ?: return Result.failure(
                     IllegalStateException("No channel URL at live index $index"),
                 )
@@ -69,6 +74,7 @@ object LiveScheduleTargetResolver {
                 startSeconds = offset,
                 scheduleIndex = index,
                 scheduleState = schedule.scheduleState,
+                eventId = ResolveTvScheduleEventId.resolve(item),
             ),
         )
     }

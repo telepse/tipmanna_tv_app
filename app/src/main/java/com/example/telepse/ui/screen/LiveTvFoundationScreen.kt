@@ -39,6 +39,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import com.example.telepse.BuildConfig
 import com.example.telepse.livetv.TvModeEnginePhase
+import com.example.telepse.ui.livetv.LiveTvTipDrawer
+import com.example.telepse.ui.livetv.LiveTvTipPreviewStrip
 import com.example.telepse.ui.tv.TvAppColors
 import com.example.telepse.ui.tv.TvLazyRow
 import com.example.telepse.ui.tv.TvPlayerControlChip
@@ -54,9 +56,11 @@ fun LiveTvFoundationScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val engine = uiState.engine
+    val tip = uiState.tip
     val lifecycleOwner = LocalLifecycleOwner.current
     val backFocus = remember { FocusRequester() }
     val scheduleFocus = remember { FocusRequester() }
+    val tipsFocus = remember { FocusRequester() }
     val refreshFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
     val pauseFocus = remember { FocusRequester() }
@@ -83,7 +87,10 @@ fun LiveTvFoundationScreen(
         }
     }
 
-    BackHandler(enabled = uiState.showSchedulePanel) {
+    BackHandler(enabled = tip.showDrawer) {
+        viewModel.closeTipDrawer()
+    }
+    BackHandler(enabled = !tip.showDrawer && uiState.showSchedulePanel) {
         viewModel.toggleSchedulePanel()
     }
 
@@ -182,7 +189,7 @@ fun LiveTvFoundationScreen(
             }
         }
 
-        if (uiState.showSchedulePanel) {
+        if (uiState.showSchedulePanel && !tip.showDrawer) {
             LiveTvSchedulePanel(
                 scheduleState = engine.schedule?.scheduleState,
                 rows =
@@ -192,6 +199,17 @@ fun LiveTvFoundationScreen(
                 liveIndex = liveIndex,
                 onSelectIndex = viewModel::playScheduleIndex,
                 onClose = viewModel::toggleSchedulePanel,
+            )
+        }
+
+        if (tip.showDrawer) {
+            LiveTvTipDrawer(
+                tip = tip,
+                onClose = viewModel::closeTipDrawer,
+                onIncrement = viewModel::incrementTipQuantity,
+                onDecrement = viewModel::decrementTipQuantity,
+                onRemove = viewModel::removeTipFromCart,
+                onClear = viewModel::clearTipCart,
             )
         }
 
@@ -212,6 +230,19 @@ fun LiveTvFoundationScreen(
                 )
             }
             else -> Unit
+        }
+
+        if (!tip.showDrawer && !uiState.showSchedulePanel) {
+            LiveTvTipPreviewStrip(
+                tip = tip,
+                onSelectCharacter = viewModel::selectTipCharacter,
+                onOpenCart = viewModel::openTipDrawer,
+                onRetry = viewModel::refreshTipCatalog,
+                modifier =
+                    Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(bottom = 96.dp),
+            )
         }
 
         Box(
@@ -237,13 +268,33 @@ fun LiveTvFoundationScreen(
                     onClick = viewModel::toggleSchedulePanel,
                     focusRequester = scheduleFocus,
                     focusChainLeft = backFocus,
+                    focusChainRight = tipsFocus,
+                )
+                TvPlayerControlChip(
+                    label =
+                        when {
+                            tip.showDrawer -> "Close tips"
+                            tip.showStrip && tip.cart.itemCount > 0 ->
+                                "Hide tips (${tip.cart.itemCount})"
+                            tip.showStrip -> "Hide tips"
+                            tip.cart.itemCount > 0 -> "Tips (${tip.cart.itemCount})"
+                            else -> "Tips"
+                        },
+                    onClick = {
+                        when {
+                            tip.showDrawer -> viewModel.closeTipDrawer()
+                            else -> viewModel.toggleTipStrip()
+                        }
+                    },
+                    focusRequester = tipsFocus,
+                    focusChainLeft = scheduleFocus,
                     focusChainRight = refreshFocus,
                 )
                 TvPlayerControlChip(
                     label = "Refresh",
                     onClick = viewModel::refreshSchedule,
                     focusRequester = refreshFocus,
-                    focusChainLeft = scheduleFocus,
+                    focusChainLeft = tipsFocus,
                     focusChainRight = playFocus,
                 )
                 TvPlayerControlChip(

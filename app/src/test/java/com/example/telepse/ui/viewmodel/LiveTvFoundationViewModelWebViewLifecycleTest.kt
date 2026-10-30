@@ -5,9 +5,11 @@ import android.webkit.WebView
 import androidx.test.core.app.ApplicationProvider
 import com.example.telepse.analytics.TvAnalyticsClient
 import com.example.telepse.data.auth.SessionExpiryHandler
+import com.example.telepse.data.auth.SessionStore
 import com.example.telepse.data.repository.TipperSession
 import com.example.telepse.livetv.FakeTvScheduleRefreshSignals
 import com.example.telepse.livetv.FakeTvScheduleSource
+import com.example.telepse.tips.FakeWalletOperations
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respondOk
@@ -48,13 +50,17 @@ class LiveTvFoundationViewModelWebViewLifecycleTest {
         Dispatchers.resetMain()
     }
 
-    private fun viewModel() =
-        LiveTvFoundationViewModel(
+    private fun viewModel(): LiveTvFoundationViewModel {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        return LiveTvFoundationViewModel(
             scheduleSource = FakeTvScheduleSource(),
             refreshSignals = FakeTvScheduleRefreshSignals(),
             sessionExpiryHandler = SessionExpiryHandler(NoOpTipperSession()),
             analytics = TvAnalyticsClient(HttpClient(MockEngine { respondOk() })),
+            walletOperations = FakeWalletOperations(),
+            sessionStore = SessionStore.createPlainForUnitTests(context),
         )
+    }
 
     private fun newWebView(): WebView =
         WebView(ApplicationProvider.getApplicationContext<Context>())
