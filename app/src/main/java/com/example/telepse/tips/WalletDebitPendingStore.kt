@@ -21,13 +21,37 @@ data class PersistedWalletDebitPending(
     val savedAtEpochMs: Long,
 )
 
+interface WalletDebitPendingPersistence {
+    fun load(): PersistedWalletDebitPending?
+
+    fun save(record: PersistedWalletDebitPending)
+
+    fun clear()
+}
+
+/** In-memory pending store for JVM unit tests (no Android prefs). */
+class MemoryWalletDebitPendingPersistence : WalletDebitPendingPersistence {
+    @Volatile
+    private var record: PersistedWalletDebitPending? = null
+
+    override fun load(): PersistedWalletDebitPending? = record
+
+    override fun save(record: PersistedWalletDebitPending) {
+        this.record = record
+    }
+
+    override fun clear() {
+        record = null
+    }
+}
+
 /**
  * Durable unresolved wallet debit (no PIN). Cleared on authoritative success or explicit dismiss.
  */
 @Singleton
 class WalletDebitPendingStore private constructor(
     private val prefs: SharedPreferences,
-) {
+) : WalletDebitPendingPersistence {
     @Inject
     constructor(@ApplicationContext context: Context) : this(openEncryptedPrefs(context))
 
@@ -37,7 +61,7 @@ class WalletDebitPendingStore private constructor(
             encodeDefaults = true
         }
 
-    fun load(): PersistedWalletDebitPending? {
+    override fun load(): PersistedWalletDebitPending? {
         val raw = prefs.getString(KEY_PENDING_JSON, null)?.trim().orEmpty()
         if (raw.isEmpty()) return null
         return runCatching {
@@ -48,13 +72,13 @@ class WalletDebitPendingStore private constructor(
         }
     }
 
-    fun save(record: PersistedWalletDebitPending) {
+    override fun save(record: PersistedWalletDebitPending) {
         prefs.edit()
             .putString(KEY_PENDING_JSON, json.encodeToString(PersistedWalletDebitPending.serializer(), record))
             .apply()
     }
 
-    fun clear() {
+    override fun clear() {
         prefs.edit().remove(KEY_PENDING_JSON).apply()
     }
 

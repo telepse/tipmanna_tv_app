@@ -1,8 +1,6 @@
 package com.example.telepse.tips
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -12,47 +10,55 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class LiveTvTipCoordinatorTest {
+    private fun newSession() = WalletDebitSubmitSession.createForTests(MemoryWalletDebitPendingPersistence())
+
+    private fun coordinator(
+        wallet: FakeWalletOperations,
+        loggedIn: () -> Boolean,
+        scope: kotlinx.coroutines.CoroutineScope,
+    ) = LiveTvTipCoordinator(
+        walletOperations = wallet,
+        debitSubmitSession = newSession(),
+        isLoggedIn = loggedIn,
+        scope = scope,
+    )
+
     @Test
     fun loadsCatalogForEvent_andBuildsCartCheckoutBoundary() =
         runTest {
             val wallet = FakeWalletOperations()
             wallet.catalogResult = Result.success(FakeWalletOperations.sampleCatalog("evt-1"))
             var loggedIn = false
-            val coordinator =
-                LiveTvTipCoordinator(
-                    walletOperations = wallet,
-                    isLoggedIn = { loggedIn },
-                    scope = this,
-                )
+            val tipCoordinator = coordinator(wallet, { loggedIn }, this)
 
-            coordinator.onProgrammeEventId("evt-1")
+            tipCoordinator.onProgrammeEventId("evt-1")
             runCurrent()
 
-            val ready = coordinator.state.value
+            val ready = tipCoordinator.state.value
             assertEquals(LiveTvTipCatalogPhase.Ready, ready.catalogPhase)
             assertEquals("evt-1", wallet.lastCatalogEventId)
             assertEquals("c1", ready.stripCharacters.first().id)
             assertEquals(listOf("Elite Tips", "General", "Premium"), ready.drawerSets.map { it.name })
 
-            coordinator.selectCharacter("e1")
+            tipCoordinator.selectCharacter("e1")
             runCurrent()
-            assertEquals(1, coordinator.state.value.cart.itemCount)
-            assertTrue(coordinator.state.value.showDrawer)
-            assertFalse(coordinator.state.value.checkout.canEnterWalletCheckout)
-            assertFalse(coordinator.state.value.checkout.canEnterQrCheckout)
+            assertEquals(1, tipCoordinator.state.value.cart.itemCount)
+            assertTrue(tipCoordinator.state.value.showDrawer)
+            assertFalse(tipCoordinator.state.value.checkout.canEnterWalletCheckout)
+            assertFalse(tipCoordinator.state.value.checkout.canEnterQrCheckout)
             assertEquals(
                 TipWalletCheckoutAvailability.RequiresSignIn,
-                coordinator.state.value.checkout.wallet,
+                tipCoordinator.state.value.checkout.wallet,
             )
             assertEquals(
                 TipQrCheckoutAvailability.BackendUnavailable,
-                coordinator.state.value.checkout.qrCard,
+                tipCoordinator.state.value.checkout.qrCard,
             )
 
             loggedIn = true
-            coordinator.refreshAuthCheckout()
-            assertTrue(coordinator.state.value.checkout.canEnterWalletCheckout)
-            assertFalse(coordinator.state.value.checkout.canEnterQrCheckout)
+            tipCoordinator.refreshAuthCheckout()
+            assertTrue(tipCoordinator.state.value.checkout.canEnterWalletCheckout)
+            assertFalse(tipCoordinator.state.value.checkout.canEnterQrCheckout)
         }
 
     @Test
@@ -60,29 +66,27 @@ class LiveTvTipCoordinatorTest {
         runTest {
             val wallet = FakeWalletOperations()
             wallet.catalogResult = Result.success(FakeWalletOperations.emptyCatalog("evt-1"))
-            val coordinator =
-                LiveTvTipCoordinator(wallet, isLoggedIn = { true }, scope = this)
+            val tipCoordinator = coordinator(wallet, { true }, this)
 
-            coordinator.onProgrammeEventId("evt-1")
+            tipCoordinator.onProgrammeEventId("evt-1")
             runCurrent()
 
-            assertEquals(LiveTvTipCatalogPhase.Empty, coordinator.state.value.catalogPhase)
-            assertTrue(coordinator.state.value.stripCharacters.isEmpty())
-            assertFalse(coordinator.state.value.canSelectTips)
+            assertEquals(LiveTvTipCatalogPhase.Empty, tipCoordinator.state.value.catalogPhase)
+            assertTrue(tipCoordinator.state.value.stripCharacters.isEmpty())
+            assertFalse(tipCoordinator.state.value.canSelectTips)
         }
 
     @Test
     fun noEventId_showsNoEvent_withoutFetch() =
         runTest {
             val wallet = FakeWalletOperations()
-            val coordinator =
-                LiveTvTipCoordinator(wallet, isLoggedIn = { false }, scope = this)
+            val tipCoordinator = coordinator(wallet, { false }, this)
 
-            coordinator.onProgrammeEventId("")
+            tipCoordinator.onProgrammeEventId("")
             runCurrent()
 
             assertEquals(0, wallet.catalogFetchCount.get())
-            assertEquals(LiveTvTipCatalogPhase.NoEvent, coordinator.state.value.catalogPhase)
+            assertEquals(LiveTvTipCatalogPhase.NoEvent, tipCoordinator.state.value.catalogPhase)
         }
 
     @Test
@@ -90,21 +94,20 @@ class LiveTvTipCoordinatorTest {
         runTest {
             val wallet = FakeWalletOperations()
             wallet.catalogResult = Result.success(FakeWalletOperations.sampleCatalog("evt-1"))
-            val coordinator =
-                LiveTvTipCoordinator(wallet, isLoggedIn = { true }, scope = this)
+            val tipCoordinator = coordinator(wallet, { true }, this)
 
-            coordinator.onProgrammeEventId("evt-1")
+            tipCoordinator.onProgrammeEventId("evt-1")
             runCurrent()
-            coordinator.selectCharacter("g1")
+            tipCoordinator.selectCharacter("g1")
             runCurrent()
-            assertEquals(1, coordinator.state.value.cart.itemCount)
+            assertEquals(1, tipCoordinator.state.value.cart.itemCount)
 
             wallet.catalogResult = Result.success(FakeWalletOperations.sampleCatalog("evt-2"))
-            coordinator.onProgrammeEventId("evt-2")
+            tipCoordinator.onProgrammeEventId("evt-2")
             runCurrent()
 
-            assertEquals("evt-2", coordinator.state.value.eventId)
-            assertTrue(coordinator.state.value.cart.isEmpty)
+            assertEquals("evt-2", tipCoordinator.state.value.eventId)
+            assertTrue(tipCoordinator.state.value.cart.isEmpty)
             assertEquals(2, wallet.catalogFetchCount.get())
             assertEquals("evt-2", wallet.lastCatalogEventId)
         }
@@ -114,36 +117,34 @@ class LiveTvTipCoordinatorTest {
         runTest {
             val wallet = FakeWalletOperations()
             wallet.catalogResult = Result.failure(IllegalStateException("boom"))
-            val coordinator =
-                LiveTvTipCoordinator(wallet, isLoggedIn = { true }, scope = this)
+            val tipCoordinator = coordinator(wallet, { true }, this)
 
-            coordinator.onProgrammeEventId("evt-1")
+            tipCoordinator.onProgrammeEventId("evt-1")
             runCurrent()
-            assertEquals(LiveTvTipCatalogPhase.Error, coordinator.state.value.catalogPhase)
+            assertEquals(LiveTvTipCatalogPhase.Error, tipCoordinator.state.value.catalogPhase)
 
             wallet.catalogResult = Result.success(FakeWalletOperations.sampleCatalog("evt-1"))
-            coordinator.refreshCatalog()
+            tipCoordinator.refreshCatalog()
             runCurrent()
-            assertEquals(LiveTvTipCatalogPhase.Ready, coordinator.state.value.catalogPhase)
+            assertEquals(LiveTvTipCatalogPhase.Ready, tipCoordinator.state.value.catalogPhase)
 
-            coordinator.selectCharacter("p1")
-            coordinator.increment("p1")
-            coordinator.decrement("p1")
+            tipCoordinator.selectCharacter("p1")
+            tipCoordinator.increment("p1")
+            tipCoordinator.decrement("p1")
             runCurrent()
-            assertEquals(1, coordinator.state.value.cart.quantityOf("p1"))
-            coordinator.removeFromCart("p1")
-            assertTrue(coordinator.state.value.cart.isEmpty)
+            assertEquals(1, tipCoordinator.state.value.cart.quantityOf("p1"))
+            tipCoordinator.removeFromCart("p1")
+            assertTrue(tipCoordinator.state.value.cart.isEmpty)
         }
 
     @Test
     fun sameEventId_doesNotRefetch() =
         runTest {
             val wallet = FakeWalletOperations()
-            val coordinator =
-                LiveTvTipCoordinator(wallet, isLoggedIn = { false }, scope = this)
-            coordinator.onProgrammeEventId("evt-1")
+            val tipCoordinator = coordinator(wallet, { false }, this)
+            tipCoordinator.onProgrammeEventId("evt-1")
             runCurrent()
-            coordinator.onProgrammeEventId("evt-1")
+            tipCoordinator.onProgrammeEventId("evt-1")
             runCurrent()
             assertEquals(1, wallet.catalogFetchCount.get())
         }

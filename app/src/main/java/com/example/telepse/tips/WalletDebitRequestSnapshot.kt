@@ -12,6 +12,7 @@ data class WalletDebitRequestSnapshot(
     val characters: List<WalletDebitCharacterLine>,
     val paymentSurface: String = "kotlin_tv",
     val deviceCategory: String = "tv",
+    val tipQuoteId: String? = null,
 ) {
     fun toRequest(pin: String): WalletDebitRequest =
         WalletDebitRequest(
@@ -21,6 +22,7 @@ data class WalletDebitRequestSnapshot(
             characters = characters,
             paymentSurface = paymentSurface,
             deviceCategory = deviceCategory,
+            tipQuoteId = tipQuoteId,
         )
 
     companion object {
@@ -31,6 +33,7 @@ data class WalletDebitRequestSnapshot(
                 characters = request.characters,
                 paymentSurface = request.paymentSurface,
                 deviceCategory = request.deviceCategory,
+                tipQuoteId = request.tipQuoteId,
             )
     }
 }

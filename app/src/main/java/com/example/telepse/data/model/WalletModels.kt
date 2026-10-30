@@ -43,6 +43,8 @@ data class WalletDebitRequest(
     val paymentContentId: String? = null,
     val playbackOffsetSec: Int? = null,
     val clientSessionId: String? = null,
+    /** Required by backend when the event has a published live tip config. */
+    val tipQuoteId: String? = null,
 )
 
 @Serializable

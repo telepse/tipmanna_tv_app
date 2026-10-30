@@ -5,7 +5,10 @@ import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import com.example.telepse.analytics.TvAnalyticsClient
 import com.example.telepse.data.auth.SessionExpiryHandler
+import com.example.telepse.data.model.ActiveTipConfigResponse
 import com.example.telepse.data.model.CharacterSetCatalogRow
+import com.example.telepse.data.model.CreateTipQuoteRequest
+import com.example.telepse.data.model.CreateTipQuoteResponse
 import com.example.telepse.data.model.EventCharacterCatalogResponse
 import com.example.telepse.data.model.TipCharacterCatalogItem
 import com.example.telepse.data.model.WalletDebitRequest
@@ -429,6 +432,12 @@ class TipsWalletViewModelSubmitTest {
                         ),
                 ),
             )
+
+        override suspend fun fetchActiveTipConfig(eventId: String): Result<ActiveTipConfigResponse> =
+            Result.success(ActiveTipConfigResponse(mode = "legacy"))
+
+        override suspend fun createTipQuote(request: CreateTipQuoteRequest): Result<CreateTipQuoteResponse> =
+            Result.failure(UnsupportedOperationException("not used"))
 
         override suspend fun debitWallet(
             request: WalletDebitRequest,

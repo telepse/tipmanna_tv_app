@@ -1,5 +1,8 @@
 package com.example.telepse.data.repository
 
+import com.example.telepse.data.model.ActiveTipConfigResponse
+import com.example.telepse.data.model.CreateTipQuoteRequest
+import com.example.telepse.data.model.CreateTipQuoteResponse
 import com.example.telepse.data.model.EventCharacterCatalogResponse
 import com.example.telepse.data.model.WalletDebitRequest
 import com.example.telepse.data.model.WalletDebitResponse
@@ -19,9 +22,11 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.content.TextContent
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.json.Json
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -30,6 +35,12 @@ class WalletRepository @Inject constructor(
     private val httpClient: HttpClient,
     private val sessionStore: SessionStore,
 ) : WalletOperations {
+    /** Debit body must emit defaulted paymentSurface/deviceCategory (global Json uses encodeDefaults=false). */
+    private val debitJson =
+        Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+        }
     override suspend fun fetchWallet(): Result<WalletStatusResponse> =
         runCatching {
             val response = httpClient.get("${ApiConfig.BASE_URL}/api/v1/wallet")
@@ -54,6 +65,33 @@ class WalletRepository @Inject constructor(
             response.body()
         }
 
+    override suspend fun fetchActiveTipConfig(eventId: String): Result<ActiveTipConfigResponse> =
+        runCatching {
+            val trimmed = eventId.trim()
+            require(trimmed.isNotEmpty()) { "Event ID is required" }
+            val response =
+                httpClient.get("${ApiConfig.BASE_URL}/api/v1/tip-config/$trimmed/active")
+            ensureSuccess(response, "fetchActiveTipConfig")
+            response.body()
+        }
+
+    override suspend fun createTipQuote(request: CreateTipQuoteRequest): Result<CreateTipQuoteResponse> =
+        try {
+            val response =
+                httpClient.post("${ApiConfig.BASE_URL}/api/v1/tip-quote") {
+                    contentType(ContentType.Application.Json)
+                    setBody(request)
+                }
+            if (!response.status.isSuccess()) {
+                throw walletHttpFailure(response, "createTipQuote")
+            }
+            Result.success(response.body())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
+
     override suspend fun debitWallet(
         request: WalletDebitRequest,
         idempotencyKey: String,
@@ -61,9 +99,14 @@ class WalletRepository @Inject constructor(
         try {
             val response =
                 httpClient.post("${ApiConfig.BASE_URL}/api/v1/wallet/debit") {
-                    contentType(ContentType.Application.Json)
                     header("Idempotency-Key", idempotencyKey)
-                    setBody(request)
+                    // Encode with defaults so paymentSurface=kotlin_tv / deviceCategory=tv are sent.
+                    setBody(
+                        TextContent(
+                            text = debitJson.encodeToString(WalletDebitRequest.serializer(), request),
+                            contentType = ContentType.Application.Json,
+                        ),
+                    )
                 }
             if (!response.status.isSuccess()) {
                 throw walletHttpFailure(response, "debitWallet")

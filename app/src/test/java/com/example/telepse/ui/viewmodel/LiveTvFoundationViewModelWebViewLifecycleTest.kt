@@ -10,6 +10,8 @@ import com.example.telepse.data.repository.TipperSession
 import com.example.telepse.livetv.FakeTvScheduleRefreshSignals
 import com.example.telepse.livetv.FakeTvScheduleSource
 import com.example.telepse.tips.FakeWalletOperations
+import com.example.telepse.tips.MemoryWalletDebitPendingPersistence
+import com.example.telepse.tips.WalletDebitSubmitSession
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respondOk
@@ -58,6 +60,7 @@ class LiveTvFoundationViewModelWebViewLifecycleTest {
             sessionExpiryHandler = SessionExpiryHandler(NoOpTipperSession()),
             analytics = TvAnalyticsClient(HttpClient(MockEngine { respondOk() })),
             walletOperations = FakeWalletOperations(),
+            debitSubmitSession = WalletDebitSubmitSession.createForTests(MemoryWalletDebitPendingPersistence()),
             sessionStore = SessionStore.createPlainForUnitTests(context),
         )
     }

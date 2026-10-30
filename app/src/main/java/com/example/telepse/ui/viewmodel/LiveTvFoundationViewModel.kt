@@ -20,6 +20,8 @@ import com.example.telepse.player.WebViewYouTubePlayerAdapter
 import com.example.telepse.player.YouTubePlayerState
 import com.example.telepse.tips.LiveTvTipCoordinator
 import com.example.telepse.tips.LiveTvTipUiState
+import com.example.telepse.tips.LiveTvWalletPayPhase
+import com.example.telepse.tips.WalletDebitSubmitSession
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -47,6 +49,7 @@ class LiveTvFoundationViewModel @Inject constructor(
     sessionExpiryHandler: SessionExpiryHandler,
     private val analytics: TvAnalyticsClient,
     walletOperations: WalletOperations,
+    debitSubmitSession: WalletDebitSubmitSession,
     private val sessionStore: SessionStore,
 ) : ViewModel() {
 
@@ -65,8 +68,10 @@ class LiveTvFoundationViewModel @Inject constructor(
     private val tipCoordinator =
         LiveTvTipCoordinator(
             walletOperations = walletOperations,
+            debitSubmitSession = debitSubmitSession,
             isLoggedIn = { sessionStore.isLoggedIn() },
             scope = viewModelScope,
+            onSessionAuthFailure = { sessionExpiryHandler.invalidateSessionIfNeeded(it) },
         )
 
     init {
@@ -218,6 +223,45 @@ class LiveTvFoundationViewModel @Inject constructor(
 
     fun refreshTipCatalog() {
         tipCoordinator.refreshCatalog()
+    }
+
+    fun startWalletCheckout() {
+        tipCoordinator.startWalletCheckout()
+    }
+
+    fun onWalletPinDigit(digit: Char) {
+        tipCoordinator.onWalletPinDigit(digit)
+    }
+
+    fun onWalletPinBackspace() {
+        tipCoordinator.onWalletPinBackspace()
+    }
+
+    fun submitWalletCheckout() {
+        tipCoordinator.submitWalletCheckout()
+    }
+
+    fun cancelWalletCheckout() {
+        tipCoordinator.cancelWalletCheckout(keepPending = true)
+    }
+
+    fun dismissWalletPendingRecovery() {
+        tipCoordinator.dismissWalletPendingRecovery()
+    }
+
+    fun acknowledgeWalletSuccess() {
+        tipCoordinator.acknowledgeWalletSuccess()
+    }
+
+    /** Back from PIN/payment overlay without leaving LIVE TV or remounting WebView. */
+    fun onWalletPayBack() {
+        val phase = tipCoordinator.state.value.walletPay.phase
+        when (phase) {
+            LiveTvWalletPayPhase.Submitting -> Unit
+            LiveTvWalletPayPhase.Success -> tipCoordinator.acknowledgeWalletSuccess()
+            LiveTvWalletPayPhase.Idle -> tipCoordinator.closeDrawer()
+            else -> tipCoordinator.cancelWalletCheckout(keepPending = true)
+        }
     }
 
     fun play() {

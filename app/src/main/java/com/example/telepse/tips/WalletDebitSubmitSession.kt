@@ -1,5 +1,6 @@
 package com.example.telepse.tips
 
+import androidx.annotation.VisibleForTesting
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -8,9 +9,14 @@ import javax.inject.Singleton
  * Pending is cleared on success or explicit dismiss; synced to [WalletDebitPendingStore].
  */
 @Singleton
-class WalletDebitSubmitSession @Inject constructor(
-    private val pendingStore: WalletDebitPendingStore,
+class WalletDebitSubmitSession private constructor(
+    private val pendingStore: WalletDebitPendingPersistence,
 ) {
+    @Inject
+    constructor(pendingStore: WalletDebitPendingStore) : this(
+        pendingStore as WalletDebitPendingPersistence,
+    )
+
     var pendingWalletDebit: PendingWalletDebit? = null
         private set
 
@@ -87,5 +93,11 @@ class WalletDebitSubmitSession @Inject constructor(
                 savedAtEpochMs = System.currentTimeMillis(),
             ),
         )
+    }
+
+    companion object {
+        @VisibleForTesting
+        fun createForTests(pendingStore: WalletDebitPendingPersistence): WalletDebitSubmitSession =
+            WalletDebitSubmitSession(pendingStore)
     }
 }

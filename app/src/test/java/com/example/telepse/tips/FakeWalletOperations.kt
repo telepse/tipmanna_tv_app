@@ -1,6 +1,9 @@
 package com.example.telepse.tips
 
+import com.example.telepse.data.model.ActiveTipConfigResponse
 import com.example.telepse.data.model.CharacterSetCatalogRow
+import com.example.telepse.data.model.CreateTipQuoteRequest
+import com.example.telepse.data.model.CreateTipQuoteResponse
 import com.example.telepse.data.model.EventCharacterCatalogResponse
 import com.example.telepse.data.model.TipCharacterCatalogItem
 import com.example.telepse.data.model.WalletDebitRequest
@@ -17,8 +20,20 @@ class FakeWalletOperations : WalletOperations {
     val catalogFetchCount = AtomicInteger(0)
     var lastCatalogEventId: String? = null
 
-    override suspend fun fetchWallet(): Result<WalletStatusResponse> =
-        Result.failure(UnsupportedOperationException("not used"))
+    var walletResult: Result<WalletStatusResponse> =
+        Result.success(WalletStatusResponse(exists = true, status = "ACTIVE", balance = "50.00"))
+    var tipConfigResult: Result<ActiveTipConfigResponse> =
+        Result.success(ActiveTipConfigResponse(mode = "legacy"))
+    var tipQuoteResult: Result<CreateTipQuoteResponse> =
+        Result.success(CreateTipQuoteResponse(quoteId = "quote-1", totalMinor = 500, configVersion = 1))
+    var debitResult: Result<WalletDebitResponse> =
+        Result.success(WalletDebitResponse(transactionId = "tx-1", newBalance = "40.00"))
+
+    val debitCalls = mutableListOf<Pair<WalletDebitRequest, String>>()
+    val tipQuoteCalls = mutableListOf<CreateTipQuoteRequest>()
+    val debitCallCount = AtomicInteger(0)
+
+    override suspend fun fetchWallet(): Result<WalletStatusResponse> = walletResult
 
     override suspend fun fetchTransactions(): Result<WalletTransactionsResponse> =
         Result.failure(UnsupportedOperationException("not used"))
@@ -30,10 +45,22 @@ class FakeWalletOperations : WalletOperations {
         return catalogResult
     }
 
+    override suspend fun fetchActiveTipConfig(eventId: String): Result<ActiveTipConfigResponse> =
+        tipConfigResult
+
+    override suspend fun createTipQuote(request: CreateTipQuoteRequest): Result<CreateTipQuoteResponse> {
+        tipQuoteCalls += request
+        return tipQuoteResult
+    }
+
     override suspend fun debitWallet(
         request: WalletDebitRequest,
         idempotencyKey: String,
-    ): Result<WalletDebitResponse> = Result.failure(UnsupportedOperationException("not used"))
+    ): Result<WalletDebitResponse> {
+        debitCallCount.incrementAndGet()
+        debitCalls += request to idempotencyKey
+        return debitResult
+    }
 
     companion object {
         fun sampleCatalog(eventId: String): EventCharacterCatalogResponse =

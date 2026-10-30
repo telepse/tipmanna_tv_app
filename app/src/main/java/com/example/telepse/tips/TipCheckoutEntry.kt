@@ -2,10 +2,10 @@ package com.example.telepse.tips
 
 /**
  * Checkout entry surface for LIVE tip cart.
- * Does not initiate payments; reports verified availability only.
+ * Wallet path enters real debit (PIN + idempotent submit). QR/card remains blocked until Task 8B.
  */
 enum class TipWalletCheckoutAvailability {
-    /** Tipper session present — wallet debit UI can be offered in a later task. */
+    /** Tipper session present — wallet debit UI may be entered. */
     Available,
 
     /** No tipper session — wallet path requires sign-in. */

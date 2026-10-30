@@ -87,7 +87,10 @@ fun LiveTvFoundationScreen(
         }
     }
 
-    BackHandler(enabled = tip.showDrawer) {
+    BackHandler(enabled = tip.showDrawer && tip.walletPay.isActive) {
+        viewModel.onWalletPayBack()
+    }
+    BackHandler(enabled = tip.showDrawer && !tip.walletPay.isActive) {
         viewModel.closeTipDrawer()
     }
     BackHandler(enabled = !tip.showDrawer && uiState.showSchedulePanel) {
@@ -210,6 +213,13 @@ fun LiveTvFoundationScreen(
                 onDecrement = viewModel::decrementTipQuantity,
                 onRemove = viewModel::removeTipFromCart,
                 onClear = viewModel::clearTipCart,
+                onStartWalletCheckout = viewModel::startWalletCheckout,
+                onWalletPinDigit = viewModel::onWalletPinDigit,
+                onWalletPinBackspace = viewModel::onWalletPinBackspace,
+                onSubmitWalletCheckout = viewModel::submitWalletCheckout,
+                onCancelWalletCheckout = viewModel::cancelWalletCheckout,
+                onDismissWalletPending = viewModel::dismissWalletPendingRecovery,
+                onAcknowledgeWalletSuccess = viewModel::acknowledgeWalletSuccess,
             )
         }
 
