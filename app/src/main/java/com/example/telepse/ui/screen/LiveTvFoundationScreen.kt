@@ -101,6 +101,7 @@ fun LiveTvFoundationScreen(
         modifier = Modifier.fillMaxSize().background(Color.Black),
     ) {
         if (engine.phase != TvModeEnginePhase.Empty) {
+            // Key changes only via ViewModel.requestPlayerSurfaceRecreate(), not ordinary attach.
             key(viewModel.webViewAttachKey) {
                 AndroidView(
                     modifier = Modifier.fillMaxSize().tvNotFocusable(),

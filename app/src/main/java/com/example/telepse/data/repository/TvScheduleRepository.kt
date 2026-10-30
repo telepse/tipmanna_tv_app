@@ -16,6 +16,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 
 @Singleton
 class TvScheduleRepository @Inject constructor(
@@ -23,7 +24,7 @@ class TvScheduleRepository @Inject constructor(
     private val sessionStore: SessionStore,
 ) {
     suspend fun fetchGlobalSchedule(ifNoneMatch: String? = null): Result<TvScheduleFetchOutcome> {
-        return runCatching {
+        return try {
             val response =
                 httpClient.get("${ApiConfig.BASE_URL}/api/v1/tv-app/schedule") {
                     ifNoneMatch?.trim()?.takeIf { it.isNotEmpty() }?.let { tag ->
@@ -32,10 +33,12 @@ class TvScheduleRepository @Inject constructor(
                 }
             val etag = response.headers[HttpHeaders.ETag]
             if (response.status == HttpStatusCode.NotModified) {
-                return@runCatching TvScheduleFetchOutcome(
-                    notModified = true,
-                    schedule = null,
-                    etag = etag ?: ifNoneMatch,
+                return Result.success(
+                    TvScheduleFetchOutcome(
+                        notModified = true,
+                        schedule = null,
+                        etag = etag ?: ifNoneMatch,
+                    ),
                 )
             }
             if (!response.status.isSuccess()) {
@@ -44,11 +47,17 @@ class TvScheduleRepository @Inject constructor(
                 Log.w(TAG, "fetchGlobalSchedule http=$status authPresent=$authPresent")
                 throw ScheduleHttpException(httpStatus = status, authPresent = authPresent)
             }
-            TvScheduleFetchOutcome(
-                notModified = false,
-                schedule = response.body<TvScheduleResponse>(),
-                etag = etag,
+            Result.success(
+                TvScheduleFetchOutcome(
+                    notModified = false,
+                    schedule = response.body<TvScheduleResponse>(),
+                    etag = etag,
+                ),
             )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Result.failure(e)
         }
     }
 

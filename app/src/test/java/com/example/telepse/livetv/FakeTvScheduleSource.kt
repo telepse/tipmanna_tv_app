@@ -15,12 +15,15 @@ class FakeTvScheduleSource : TvScheduleSource {
                 etag = "\"test-etag-1\"",
             ),
         )
+    /** When set, fetch throws instead of returning [nextResult] (e.g. CancellationException). */
+    var throwOnFetch: Throwable? = null
     val fetchCount = AtomicInteger(0)
     var lastIfNoneMatch: String? = null
 
     override suspend fun fetchGlobalSchedule(ifNoneMatch: String?): Result<TvScheduleFetchOutcome> {
         fetchCount.incrementAndGet()
         lastIfNoneMatch = ifNoneMatch
+        throwOnFetch?.let { throw it }
         return nextResult
     }
 

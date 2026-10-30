@@ -217,6 +217,13 @@ class TvModeEngine(
                                 s.copy(phase = nextPhase, refreshGeneration = generation)
                             }
                             completeSessionExpiredRecoveryIfNeeded()
+                            // 304 means schedule body is unchanged, not that the player surface is still
+                            // loaded. After WebView destroy/reattach, loaded identity is cleared while
+                            // the cached target + ETag survive — re-bootstrap without a full schedule body.
+                            if (playerSurfaceNeedsBootstrap()) {
+                                syncPlaybackFromTarget(force = true)
+                                resumePlaybackIfReady()
+                            }
                             return@launch
                         }
                         val schedule =
@@ -453,6 +460,15 @@ class TvModeEngine(
 
     private fun isGenerationCurrent(generation: Long): Boolean {
         return generation == refreshGeneration && _state.value.isActive
+    }
+
+    /**
+     * True when a schedule target exists but the current player surface has no loaded identity
+     * (typical after [onWebViewReleased] / destroy before a not-modified schedule refresh).
+     */
+    private fun playerSurfaceNeedsBootstrap(): Boolean {
+        val snapshot = _state.value
+        return snapshot.target != null && snapshot.loadedVideoId == null
     }
 
     /**

@@ -9,11 +9,11 @@ import com.example.telepse.analytics.TvAnalyticsClipMode
 import com.example.telepse.analytics.TvAnalyticsSurfaces
 import com.example.telepse.data.auth.SessionExpiryHandler
 import com.example.telepse.livetv.LiveScheduleScope
-import com.example.telepse.livetv.PusherGlobalScheduleRefreshSignals
 import com.example.telepse.livetv.TvModeEngine
 import com.example.telepse.livetv.TvModeEnginePhase
 import com.example.telepse.livetv.TvModeEngineState
-import com.example.telepse.livetv.TvScheduleRepositorySource
+import com.example.telepse.livetv.TvScheduleRefreshSignals
+import com.example.telepse.livetv.TvScheduleSource
 import com.example.telepse.player.WebViewYouTubePlayerAdapter
 import com.example.telepse.player.YouTubePlayerState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -37,11 +37,23 @@ data class LiveTvUiState(
 
 @HiltViewModel
 class LiveTvFoundationViewModel @Inject constructor(
-    scheduleSource: TvScheduleRepositorySource,
-    refreshSignals: PusherGlobalScheduleRefreshSignals,
+    scheduleSource: TvScheduleSource,
+    refreshSignals: TvScheduleRefreshSignals,
     sessionExpiryHandler: SessionExpiryHandler,
     private val analytics: TvAnalyticsClient,
 ) : ViewModel() {
+
+    // Must be initialized before [init]: viewModelScope uses Main.immediate, so the analytics
+    // collector coroutine can run during construction and must not observe a null [engine].
+    private val adapter = WebViewYouTubePlayerAdapter()
+    private val engine =
+        TvModeEngine(
+            scheduleSource = scheduleSource,
+            player = adapter,
+            scope = viewModelScope,
+            refreshSignals = refreshSignals,
+            onAuthenticatedSessionFailure = { sessionExpiryHandler.invalidateSessionIfNeeded(it) },
+        )
 
     init {
         analytics.setContext(surface = TvAnalyticsSurfaces.TV_LOOPER)
@@ -60,18 +72,14 @@ class LiveTvFoundationViewModel @Inject constructor(
         }
     }
 
-    private val adapter = WebViewYouTubePlayerAdapter()
-    private val engine =
-        TvModeEngine(
-            scheduleSource = scheduleSource,
-            player = adapter,
-            scope = viewModelScope,
-            refreshSignals = refreshSignals,
-            onAuthenticatedSessionFailure = { sessionExpiryHandler.invalidateSessionIfNeeded(it) },
-        )
-
     private val isMuted = MutableStateFlow(true)
     private val showSchedulePanel = MutableStateFlow(false)
+
+    /**
+     * Compose remount key for the Live TV [android.webkit.WebView].
+     * Incremented only by [requestPlayerSurfaceRecreate] — never by ordinary [attachWebView],
+     * which would remount the view on every recomposition and prevent [playerReady].
+     */
     private var surfaceGeneration = 0
 
     val uiState: StateFlow<LiveTvUiState> =
@@ -110,9 +118,17 @@ class LiveTvFoundationViewModel @Inject constructor(
     }
 
     fun attachWebView(webView: WebView) {
-        surfaceGeneration++
         engine.attachWebView(webView)
         isMuted.value = true
+    }
+
+    /**
+     * Explicit hard reset: bump the Compose key (so [AndroidView] remounts) and tear down the
+     * current player surface. Ordinary attachment must not call this.
+     */
+    fun requestPlayerSurfaceRecreate() {
+        surfaceGeneration++
+        engine.recreatePlayerAfterError()
     }
 
     fun onWebViewReleased() {

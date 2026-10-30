@@ -3,10 +3,12 @@ package com.example.telepse.player
 import android.annotation.SuppressLint
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.example.telepse.BuildConfig
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -31,8 +33,8 @@ class WebViewYouTubePlayerAdapter : YouTubePlayerAdapter {
     @SuppressLint("SetJavaScriptEnabled")
     override fun attachWebView(webView: WebView) {
         this.webView = webView
-        emitMetric("webview_created", "attached")
-        emitMetric("iframe_api_requested", YoutubeIframeHtml.IFRAME_API_SCRIPT)
+        emitMetric("webview_attached", "")
+        emitMetric("iframe_api_requested", "iframe_api")
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -42,7 +44,7 @@ class WebViewYouTubePlayerAdapter : YouTubePlayerAdapter {
         webView.webChromeClient = WebChromeClient()
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
-                emitMetric("page_finished", url ?: "")
+                emitMetric("page_finished", sanitizePageUrl(url))
             }
         }
         bridge = YouTubePlayerBridge(
@@ -69,7 +71,7 @@ class WebViewYouTubePlayerAdapter : YouTubePlayerAdapter {
                 emitMetric("player_error", "code=$code")
             },
             onVideoLoadedCallback = { videoId ->
-                emitMetric("video_loaded", videoId)
+                emitMetric("video_loaded", sanitizeVideoId(videoId))
             },
         )
         webView.addJavascriptInterface(bridge!!, "TipmannaBridge")
@@ -85,7 +87,7 @@ class WebViewYouTubePlayerAdapter : YouTubePlayerAdapter {
             return
         }
         evalJs("loadVideoById('${escapeJs(videoId)}', ${startSeconds.toInt()});")
-        emitMetric("load", videoId)
+        emitMetric("load", sanitizeVideoId(videoId))
     }
 
     override fun cue(videoId: String, startSeconds: Float) {
@@ -97,12 +99,12 @@ class WebViewYouTubePlayerAdapter : YouTubePlayerAdapter {
             return
         }
         evalJs("cueVideoById('${escapeJs(videoId)}', ${startSeconds.toInt()});")
-        emitMetric("cue", videoId)
+        emitMetric("cue", sanitizeVideoId(videoId))
     }
 
     override fun play() {
         evalJs("playVideo();")
-        emitMetric("play", "")
+        emitMetric("play", "playerReady=$playerReady")
     }
 
     override fun pause() {
@@ -159,7 +161,7 @@ class WebViewYouTubePlayerAdapter : YouTubePlayerAdapter {
     override fun state(): YouTubePlayerState = lastState
 
     override fun destroy() {
-        emitMetric("destroy", "")
+        emitMetric("webview_released", "destroy")
         webView?.let { wv ->
             bridge?.let { wv.removeJavascriptInterface("TipmannaBridge") }
             wv.stopLoading()
@@ -199,7 +201,7 @@ class WebViewYouTubePlayerAdapter : YouTubePlayerAdapter {
     ) {
         val wv = webView ?: return
         val html = YoutubeIframeHtml.build(videoId, autoplay, mute, startSeconds)
-        emitMetric("bootstrap_html", videoId)
+        emitMetric("bootstrap_html", sanitizeVideoId(videoId))
         wv.loadDataWithBaseURL(
             YoutubeIframeHtml.EMBED_ORIGIN,
             html,
@@ -216,10 +218,58 @@ class WebViewYouTubePlayerAdapter : YouTubePlayerAdapter {
     }
 
     private fun emitMetric(name: String, detail: String) {
+        if (BuildConfig.DEBUG && shouldLogMetric(name)) {
+            val line = if (detail.isEmpty()) name else "$name $detail"
+            Log.d(TAG, line)
+        }
         _events.tryEmit(
             YouTubePlayerEvent.Metric(name, System.currentTimeMillis(), detail),
         )
     }
 
     private fun escapeJs(id: String): String = id.replace("'", "\\'")
+
+    companion object {
+        private const val TAG = "WebViewYouTube"
+
+        private val LOGGED_METRICS =
+            setOf(
+                "webview_attached",
+                "webview_released",
+                "bootstrap_html",
+                "page_finished",
+                "iframe_api_requested",
+                "iframe_api_ready",
+                "player_ready",
+                "player_error",
+                "play",
+                "load",
+                "video_loaded",
+                "recreate_surface",
+            )
+
+        private fun shouldLogMetric(name: String): Boolean =
+            name in LOGGED_METRICS || name.startsWith("state_")
+
+        /** Host+path only; never data: bodies or query strings. */
+        internal fun sanitizePageUrl(url: String?): String {
+            if (url.isNullOrBlank()) return "empty"
+            if (url.startsWith("data:", ignoreCase = true)) return "data"
+            val withoutQuery = url.substringBefore('#').substringBefore('?')
+            val schemeSep = withoutQuery.indexOf("://")
+            if (schemeSep < 0) return withoutQuery.take(48)
+            val hostAndPath = withoutQuery.substring(schemeSep + 3)
+            return hostAndPath.ifBlank { "url" }.take(96)
+        }
+
+        /** 11-char YouTube ids only; drop anything else. */
+        internal fun sanitizeVideoId(videoId: String): String {
+            val trimmed = videoId.trim()
+            return if (trimmed.length == 11 && trimmed.all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
+                trimmed
+            } else {
+                "id_len=${trimmed.length}"
+            }
+        }
+    }
 }

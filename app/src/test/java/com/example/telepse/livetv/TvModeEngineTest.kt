@@ -3,6 +3,7 @@ package com.example.telepse.livetv
 import com.example.telepse.data.model.TvScheduleFetchOutcome
 import com.example.telepse.data.model.TvScheduleResponse
 import com.example.telepse.data.network.ScheduleHttpException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import com.example.telepse.player.YouTubePlayerState
 import kotlinx.coroutines.test.advanceTimeBy
@@ -11,6 +12,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -206,6 +208,27 @@ class TvModeEngineTest {
     }
 
     @Test
+    fun scheduleFetchCancellation_doesNotSurfaceAsScheduleError() = runTest {
+        val source = FakeTvScheduleSource()
+        source.throwOnFetch =
+            CancellationException("StandaloneCoroutine was cancelled")
+        val player = FakeYouTubePlayerAdapter()
+        val engine = TvModeEngine(source, player, this, pollIntervalMs = null, errorRecoveryDelayMs = null)
+
+        engine.start()
+        advanceUntilIdle()
+
+        assertNotEquals(TvModeEnginePhase.Error, engine.state.value.phase)
+        assertFalse(
+            engine.state.value.errorMessage.orEmpty().contains("Temporary error"),
+        )
+        assertTrue(player.loadCalls.isEmpty())
+        engine.stop()
+        advanceUntilIdle()
+        engine.dispose()
+    }
+
+    @Test
     fun emptyNoSafeContent_setsEmptyPhase() = runTest {
         val source = FakeTvScheduleSource()
         source.nextResult =
@@ -385,9 +408,51 @@ class TvModeEngineTest {
 
         engine.onWebViewReleased()
         assertEquals(null, engine.state.value.loadedVideoId)
+        assertFalse(engine.state.value.playerReady)
+        assertEquals(1, player.destroyCount)
 
         engine.syncPlaybackFromTarget(force = false)
         assertEquals(2, player.loadCalls.size)
+        engine.dispose()
+    }
+
+    @Test
+    fun singleSurface_loadDeliversPlayerReadyAndPlay() = runTest {
+        val source = FakeTvScheduleSource()
+        val player = FakeYouTubePlayerAdapter()
+        val engine = TvModeEngine(source, player, this, pollIntervalMs = null, errorRecoveryDelayMs = null)
+        engine.start()
+        advanceUntilIdle()
+
+        assertEquals(TvModeEnginePhase.Ready, engine.state.value.phase)
+        assertTrue(engine.state.value.playerReady)
+        assertEquals(1, player.loadCalls.size)
+        assertTrue(player.playCalls.isNotEmpty())
+        assertEquals(0, player.destroyCount)
+
+        player.emitState(YouTubePlayerState.PLAYING)
+        advanceUntilIdle()
+        assertEquals(YouTubePlayerState.PLAYING, engine.state.value.playerState)
+        engine.dispose()
+    }
+
+    @Test
+    fun repeatedSyncWithoutRelease_doesNotDestroyOrReloadSameTarget() = runTest {
+        val source = FakeTvScheduleSource()
+        val player = FakeYouTubePlayerAdapter()
+        val engine = TvModeEngine(source, player, this, pollIntervalMs = null, errorRecoveryDelayMs = null)
+        engine.start()
+        advanceUntilIdle()
+        assertEquals(1, player.loadCalls.size)
+
+        repeat(5) {
+            engine.syncPlaybackFromTarget(force = false)
+            advanceUntilIdle()
+        }
+
+        assertEquals(1, player.loadCalls.size)
+        assertEquals(0, player.destroyCount)
+        assertTrue(engine.state.value.playerReady)
         engine.dispose()
     }
 
@@ -477,6 +542,121 @@ class TvModeEngineTest {
         assertEquals(2, player.loadCalls.size)
         assertEquals("P4kFofLwPLY", player.loadCalls.last().first)
         assertEquals(5f, player.loadCalls.last().second)
+        engine.dispose()
+    }
+
+    @Test
+    fun releaseThenReenter_withNotModified_bootstrapsPlayerAgain() = runTest {
+        val source = FakeTvScheduleSource()
+        val player = FakeYouTubePlayerAdapter()
+        val engine = TvModeEngine(source, player, this, pollIntervalMs = null, errorRecoveryDelayMs = null)
+        engine.start()
+        advanceUntilIdle()
+        assertEquals(1, player.loadCalls.size)
+        assertEquals("Ffs0YHm2jks", engine.state.value.loadedVideoId)
+        assertTrue(engine.state.value.playerReady)
+
+        // Leave LIVE: stop + WebView release (Compose onRelease).
+        engine.stop()
+        engine.onWebViewReleased()
+        assertEquals(null, engine.state.value.loadedVideoId)
+        assertFalse(engine.state.value.playerReady)
+        assertFalse(engine.state.value.isActive)
+
+        // Attach while inactive must not load (same guard as attachWebView → sync).
+        engine.syncPlaybackFromTarget(force = true)
+        assertEquals(1, player.loadCalls.size)
+
+        // Re-enter: schedule unchanged → HTTP 304, but new surface needs bootstrap.
+        source.nextResult =
+            Result.success(
+                TvScheduleFetchOutcome(notModified = true, etag = "\"test-etag-1\""),
+            )
+        engine.start()
+        advanceUntilIdle()
+
+        assertEquals(TvModeEnginePhase.Ready, engine.state.value.phase)
+        assertEquals(2, player.loadCalls.size)
+        assertEquals("Ffs0YHm2jks", engine.state.value.loadedVideoId)
+        assertTrue(engine.state.value.playerReady)
+        engine.dispose()
+    }
+
+    @Test
+    fun releaseThenReenter_withNotModified_keepsReadyFalseUntilPlayerReady() = runTest {
+        val source = FakeTvScheduleSource()
+        val player = FakeYouTubePlayerAdapter()
+        player.ready = false
+        val engine = TvModeEngine(source, player, this, pollIntervalMs = null, errorRecoveryDelayMs = null)
+        engine.start()
+        advanceUntilIdle()
+        assertEquals(1, player.loadCalls.size)
+        assertFalse(engine.state.value.playerReady)
+
+        engine.stop()
+        engine.onWebViewReleased()
+
+        source.nextResult =
+            Result.success(
+                TvScheduleFetchOutcome(notModified = true, etag = "\"test-etag-1\""),
+            )
+        engine.start()
+        advanceUntilIdle()
+
+        assertEquals(2, player.loadCalls.size)
+        assertEquals("Ffs0YHm2jks", engine.state.value.loadedVideoId)
+        assertFalse(engine.state.value.playerReady)
+
+        player.emitPlayerReady()
+        advanceUntilIdle()
+        assertTrue(engine.state.value.playerReady)
+        engine.dispose()
+    }
+
+    @Test
+    fun syncWhileInactive_doesNotLoadEvenWithForce() = runTest {
+        val source = FakeTvScheduleSource()
+        val player = FakeYouTubePlayerAdapter()
+        val engine = TvModeEngine(source, player, this, pollIntervalMs = null, errorRecoveryDelayMs = null)
+        engine.start()
+        advanceUntilIdle()
+        assertEquals(1, player.loadCalls.size)
+
+        engine.stop()
+        engine.onWebViewReleased()
+        engine.syncPlaybackFromTarget(force = true)
+        assertEquals(1, player.loadCalls.size)
+        assertEquals(null, engine.state.value.loadedVideoId)
+        engine.dispose()
+    }
+
+    @Test
+    fun repeatedReleaseReenter_withNotModified_bootstrapsEachCycle() = runTest {
+        val source = FakeTvScheduleSource()
+        val player = FakeYouTubePlayerAdapter()
+        val engine = TvModeEngine(source, player, this, pollIntervalMs = null, errorRecoveryDelayMs = null)
+        engine.start()
+        advanceUntilIdle()
+        assertEquals(1, player.loadCalls.size)
+
+        repeat(3) { cycle ->
+            engine.stop()
+            engine.onWebViewReleased()
+            assertEquals(null, engine.state.value.loadedVideoId)
+            assertFalse(engine.state.value.playerReady)
+
+            source.nextResult =
+                Result.success(
+                    TvScheduleFetchOutcome(notModified = true, etag = "\"test-etag-1\""),
+                )
+            engine.start()
+            advanceUntilIdle()
+
+            assertEquals(cycle + 2, player.loadCalls.size)
+            assertEquals("Ffs0YHm2jks", engine.state.value.loadedVideoId)
+            assertTrue(engine.state.value.playerReady)
+            assertEquals(TvModeEnginePhase.Ready, engine.state.value.phase)
+        }
         engine.dispose()
     }
 }
