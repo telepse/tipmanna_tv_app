@@ -98,6 +98,8 @@ dependencies {
     implementation(libs.ktor.client.websockets)
     implementation(libs.ktor.client.logging)
     
+    implementation("com.google.zxing:core:3.5.3")
+
     // Coroutines
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)

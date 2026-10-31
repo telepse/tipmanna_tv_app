@@ -3,7 +3,10 @@ package com.example.telepse.data.repository
 import com.example.telepse.data.model.ActiveTipConfigResponse
 import com.example.telepse.data.model.CreateTipQuoteRequest
 import com.example.telepse.data.model.CreateTipQuoteResponse
+import com.example.telepse.data.model.CreateTvTipCheckoutSessionRequest
+import com.example.telepse.data.model.CreateTvTipCheckoutSessionResponse
 import com.example.telepse.data.model.EventCharacterCatalogResponse
+import com.example.telepse.data.model.TvTipCheckoutSessionStatusResponse
 import com.example.telepse.data.model.WalletDebitRequest
 import com.example.telepse.data.model.WalletDebitResponse
 import com.example.telepse.data.model.WalletStatusResponse
@@ -37,6 +40,11 @@ class WalletRepository @Inject constructor(
 ) : WalletOperations {
     /** Debit body must emit defaulted paymentSurface/deviceCategory (global Json uses encodeDefaults=false). */
     private val debitJson =
+        Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+        }
+    private val checkoutJson =
         Json {
             ignoreUnknownKeys = true
             encodeDefaults = true
@@ -116,6 +124,58 @@ class WalletRepository @Inject constructor(
             throw e
         } catch (e: Throwable) {
             Result.failure(e)
+        }
+
+    override suspend fun createTvTipCheckoutSession(
+        request: CreateTvTipCheckoutSessionRequest,
+    ): Result<CreateTvTipCheckoutSessionResponse> =
+        try {
+            val idempotencyKey = request.idempotencyKey?.trim().orEmpty()
+            val response =
+                httpClient.post("${ApiConfig.BASE_URL}/api/v1/tv-tip-checkout/sessions") {
+                    if (idempotencyKey.isNotEmpty()) {
+                        header("Idempotency-Key", idempotencyKey)
+                    }
+                    setBody(
+                        TextContent(
+                            text =
+                                checkoutJson.encodeToString(
+                                    CreateTvTipCheckoutSessionRequest.serializer(),
+                                    request,
+                                ),
+                            contentType = ContentType.Application.Json,
+                        ),
+                    )
+                }
+            if (!response.status.isSuccess()) {
+                throw walletHttpFailure(response, "createTvTipCheckoutSession")
+            }
+            Result.success(response.body())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
+
+    override suspend fun fetchTvTipCheckoutSessionStatus(
+        sessionId: String,
+    ): Result<TvTipCheckoutSessionStatusResponse> =
+        runCatching {
+            val trimmed = sessionId.trim()
+            require(trimmed.isNotEmpty()) { "Session id is required" }
+            val response =
+                httpClient.get("${ApiConfig.BASE_URL}/api/v1/tv-tip-checkout/sessions/$trimmed/status")
+            ensureSuccess(response, "fetchTvTipCheckoutSessionStatus")
+            response.body()
+        }
+
+    override suspend fun cancelTvTipCheckoutSession(sessionId: String): Result<Unit> =
+        runCatching {
+            val trimmed = sessionId.trim()
+            require(trimmed.isNotEmpty()) { "Session id is required" }
+            val response =
+                httpClient.post("${ApiConfig.BASE_URL}/api/v1/tv-tip-checkout/sessions/$trimmed/cancel")
+            ensureSuccess(response, "cancelTvTipCheckoutSession")
         }
 
     private suspend fun ensureSuccess(response: HttpResponse, operation: String) {

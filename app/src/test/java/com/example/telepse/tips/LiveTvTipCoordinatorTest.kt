@@ -51,14 +51,14 @@ class LiveTvTipCoordinatorTest {
                 tipCoordinator.state.value.checkout.wallet,
             )
             assertEquals(
-                TipQrCheckoutAvailability.BackendUnavailable,
+                TipQrCheckoutAvailability.RequiresSignIn,
                 tipCoordinator.state.value.checkout.qrCard,
             )
 
             loggedIn = true
             tipCoordinator.refreshAuthCheckout()
             assertTrue(tipCoordinator.state.value.checkout.canEnterWalletCheckout)
-            assertFalse(tipCoordinator.state.value.checkout.canEnterQrCheckout)
+            assertTrue(tipCoordinator.state.value.checkout.canEnterQrCheckout)
         }
 
     @Test

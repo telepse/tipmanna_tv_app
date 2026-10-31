@@ -20,6 +20,7 @@ import com.example.telepse.player.WebViewYouTubePlayerAdapter
 import com.example.telepse.player.YouTubePlayerState
 import com.example.telepse.tips.LiveTvTipCoordinator
 import com.example.telepse.tips.LiveTvTipUiState
+import com.example.telepse.tips.LiveTvQrPayPhase
 import com.example.telepse.tips.LiveTvWalletPayPhase
 import com.example.telepse.tips.WalletDebitSubmitSession
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -229,6 +230,18 @@ class LiveTvFoundationViewModel @Inject constructor(
         tipCoordinator.startWalletCheckout()
     }
 
+    fun startQrCheckout() {
+        tipCoordinator.startQrCheckout()
+    }
+
+    fun cancelQrCheckout() {
+        tipCoordinator.cancelQrCheckout()
+    }
+
+    fun acknowledgeQrSuccess() {
+        tipCoordinator.acknowledgeQrSuccess()
+    }
+
     fun onWalletPinDigit(digit: Char) {
         tipCoordinator.onWalletPinDigit(digit)
     }
@@ -255,7 +268,16 @@ class LiveTvFoundationViewModel @Inject constructor(
 
     /** Back from PIN/payment overlay without leaving LIVE TV or remounting WebView. */
     fun onWalletPayBack() {
-        val phase = tipCoordinator.state.value.walletPay.phase
+        val tip = tipCoordinator.state.value
+        if (tip.qrPay.isActive && !tip.walletPay.isActive) {
+            when (tip.qrPay.phase) {
+                LiveTvQrPayPhase.Paid -> tipCoordinator.acknowledgeQrSuccess()
+                LiveTvQrPayPhase.CreatingSession -> Unit
+                else -> tipCoordinator.cancelQrCheckout()
+            }
+            return
+        }
+        val phase = tip.walletPay.phase
         when (phase) {
             LiveTvWalletPayPhase.Submitting -> Unit
             LiveTvWalletPayPhase.Success -> tipCoordinator.acknowledgeWalletSuccess()

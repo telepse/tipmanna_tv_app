@@ -9,15 +9,13 @@ class TipCheckoutEntryTest {
     fun walletAvailableOnlyWhenLoggedInAndCartReady() {
         val choices = TipCheckoutChoices.forCart(cartReady = true, loggedIn = true)
         assertTrue(choices.canEnterWalletCheckout)
-        assertFalse(choices.canEnterQrCheckout)
+        assertTrue(choices.canEnterQrCheckout)
     }
 
     @Test
-    fun qrAlwaysUnavailableUntilBackendShips() {
-        val choices = TipCheckoutChoices.forCart(cartReady = true, loggedIn = true)
+    fun qrRequiresSignInWhenLoggedOut() {
+        val choices = TipCheckoutChoices.forCart(cartReady = true, loggedIn = false)
         assertFalse(choices.canEnterQrCheckout)
-        assertTrue(
-            choices.qrCard == TipQrCheckoutAvailability.BackendUnavailable,
-        )
+        assertTrue(choices.qrCard == TipQrCheckoutAvailability.RequiresSignIn)
     }
 }

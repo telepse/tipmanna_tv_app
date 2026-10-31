@@ -35,6 +35,7 @@ data class LiveTvTipUiState(
     /** True when catalog UI is interactive (Ready with characters). */
     val canSelectTips: Boolean = false,
     val walletPay: LiveTvWalletPayState = LiveTvWalletPayState(),
+    val qrPay: LiveTvQrPayState = LiveTvQrPayState(),
 )
 
 /**
@@ -59,12 +60,27 @@ class LiveTvTipCoordinator(
     private var payQuoteId: String? = null
     private var payAmountGbp: Double? = null
 
+    private val qrCheckoutFlow: LiveTvQrCheckoutFlow by lazy {
+        LiveTvQrCheckoutFlow(
+            walletOperations = walletOperations,
+            scope = scope,
+            onSessionAuthFailure = onSessionAuthFailure,
+            resolveAmountAndQuote = { cart -> resolveAmountAndQuote(cart, QuoteFailureTarget.Qr) },
+        )
+    }
+
+    private enum class QuoteFailureTarget {
+        Wallet,
+        Qr,
+    }
+
     fun onProgrammeEventId(eventId: String?) {
         val trimmed = eventId?.trim().orEmpty()
         if (trimmed == boundEventId) return
         boundEventId = trimmed
         catalogJob?.cancel()
         cancelWalletJob()
+        qrCheckoutFlow.reset()
         clearPayAttemptLocals()
         catalogIds = emptySet()
 
@@ -117,12 +133,14 @@ class LiveTvTipCoordinator(
 
     fun closeDrawer() {
         if (_state.value.walletPay.phase == LiveTvWalletPayPhase.Submitting) return
+        if (_state.value.qrPay.phase == LiveTvQrPayPhase.CreatingSession) return
         cancelWalletCheckout(keepPending = true)
+        cancelQrCheckout()
         _state.update { it.copy(showDrawer = false) }
     }
 
     fun selectCharacter(characterId: String) {
-        if (_state.value.walletPay.blocksCartMutation) return
+        if (cartMutationBlocked()) return
         val character = findCharacter(characterId) ?: return
         val eventId = boundEventId
         if (eventId.isEmpty()) return
@@ -146,7 +164,7 @@ class LiveTvTipCoordinator(
     }
 
     fun removeFromCart(characterId: String) {
-        if (_state.value.walletPay.blocksCartMutation) return
+        if (cartMutationBlocked()) return
         _state.update { current ->
             val nextCart = current.cart.remove(characterId)
             current.copy(
@@ -157,7 +175,7 @@ class LiveTvTipCoordinator(
     }
 
     fun clearCart() {
-        if (_state.value.walletPay.blocksCartMutation) return
+        if (cartMutationBlocked()) return
         _state.update { current ->
             val nextCart = current.cart.clear()
             current.copy(
@@ -167,11 +185,62 @@ class LiveTvTipCoordinator(
         }
     }
 
+    /** Begin QR/card checkout: backend session + phone pay (poll authoritative status). */
+    fun startQrCheckout() {
+        val current = _state.value
+        if (!current.checkout.canEnterQrCheckout) return
+        if (current.qrPay.phase == LiveTvQrPayPhase.CreatingSession) return
+        if (!isLoggedIn()) {
+            setQrPayFailed("Sign in as a tipper to start card checkout.")
+            return
+        }
+        val cart = current.cart
+        if (cart.isEmpty || cart.eventId.isBlank()) return
+        if (WalletTipValidation.normalizeEventId(cart.eventId) == null) {
+            setQrPayFailed("This programme event id is not a valid tip target.")
+            return
+        }
+        if (current.walletPay.isActive && current.walletPay.phase != LiveTvWalletPayPhase.Submitting) {
+            cancelWalletCheckout(keepPending = true)
+        }
+        _state.update { it.copy(showDrawer = true, qrPay = LiveTvQrPayState()) }
+        qrCheckoutFlow.start(
+            cart = cart,
+            onState = { qr -> _state.update { it.copy(qrPay = qr) } },
+            onPaid = {
+                _state.update { s ->
+                    val cleared = s.cart.clear()
+                    s.copy(
+                        cart = cleared,
+                        checkout = TipCheckoutChoices.forCart(false, isLoggedIn()),
+                        qrPay =
+                            s.qrPay.copy(
+                                phase = LiveTvQrPayPhase.Paid,
+                                message = "Payment confirmed.",
+                            ),
+                    )
+                }
+            },
+        )
+    }
+
+    fun cancelQrCheckout() {
+        if (_state.value.qrPay.phase == LiveTvQrPayPhase.CreatingSession) return
+        qrCheckoutFlow.cancel { qr -> _state.update { it.copy(qrPay = qr) } }
+    }
+
+    fun acknowledgeQrSuccess() {
+        qrCheckoutFlow.acknowledgePaid { qr -> _state.update { it.copy(qrPay = qr) } }
+    }
+
     /** Begin wallet checkout from the tip drawer (PIN entry after prerequisite checks). */
     fun startWalletCheckout() {
         val current = _state.value
         if (!current.checkout.canEnterWalletCheckout) return
         if (current.walletPay.phase == LiveTvWalletPayPhase.Submitting) return
+        if (current.qrPay.isActive) {
+            cancelQrCheckout()
+        }
         if (!isLoggedIn()) {
             _state.update {
                 it.copy(
@@ -529,14 +598,18 @@ class LiveTvTipCoordinator(
     fun reset() {
         catalogJob?.cancel()
         cancelWalletJob()
+        qrCheckoutFlow.reset()
         clearPayAttemptLocals()
         boundEventId = ""
         catalogIds = emptySet()
         _state.value = LiveTvTipUiState()
     }
 
+    private fun cartMutationBlocked(): Boolean =
+        _state.value.walletPay.blocksCartMutation || _state.value.qrPay.blocksCartMutation
+
     private fun mutateQuantity(characterId: String, transform: (Int) -> Int) {
-        if (_state.value.walletPay.blocksCartMutation) return
+        if (cartMutationBlocked()) return
         _state.update { current ->
             if (!current.canSelectTips && current.cart.quantityOf(characterId) == 0) {
                 return@update current
@@ -550,7 +623,10 @@ class LiveTvTipCoordinator(
         }
     }
 
-    private suspend fun resolveAmountAndQuote(cart: TipCartState): Pair<Double, String?>? {
+    private suspend fun resolveAmountAndQuote(
+        cart: TipCartState,
+        failureTarget: QuoteFailureTarget = QuoteFailureTarget.Wallet,
+    ): Pair<Double, String?>? {
         // Retry path: reuse frozen snapshot amount + tipQuoteId (same logical payment).
         val pending = debitSubmitSession.pendingWalletDebit
         if (pending != null &&
@@ -564,20 +640,20 @@ class LiveTvTipCoordinator(
         val tipConfig =
             tipConfigResult.getOrElse { e ->
                 onSessionAuthFailure(e)
-                setWalletPayFailed(WalletUserFacingErrors.messageFor(e))
+                reportQuoteFailure(WalletUserFacingErrors.messageFor(e), failureTarget)
                 return null
             }
         when (val plan = LiveTvTipQuotePlanner.plan(cart, tipConfig)) {
             is LiveTvTipQuotePlanner.PlanResult.LegacyNoQuoteRequired -> {
                 val amount = cart.provisionalTotal
                 if (amount < 1.0) {
-                    setWalletPayFailed("Tip amount must be at least £1.")
+                    reportQuoteFailure("Tip amount must be at least £1.", failureTarget)
                     return null
                 }
                 return amount to null
             }
             is LiveTvTipQuotePlanner.PlanResult.Failed -> {
-                setWalletPayFailed(plan.message)
+                reportQuoteFailure(plan.message, failureTarget)
                 return null
             }
             is LiveTvTipQuotePlanner.PlanResult.Ready -> {
@@ -585,15 +661,18 @@ class LiveTvTipCoordinator(
                 val quote =
                     quoteResult.getOrElse { e ->
                         onSessionAuthFailure(e)
-                        setWalletPayFailed(WalletUserFacingErrors.messageFor(e))
+                        reportQuoteFailure(WalletUserFacingErrors.messageFor(e), failureTarget)
                         return null
                     }
                 if (quote.quoteId.isBlank() || quote.totalMinor <= 0) {
-                    setWalletPayFailed("Could not lock tip total with the server.")
+                    reportQuoteFailure("Could not lock tip total with the server.", failureTarget)
                     return null
                 }
                 if (quote.totalMinor != plan.planned.expectedTotalMinor) {
-                    setWalletPayFailed("Quoted tip total did not match the cart. Refresh and try again.")
+                    reportQuoteFailure(
+                        "Quoted tip total did not match the cart. Refresh and try again.",
+                        failureTarget,
+                    )
                     return null
                 }
                 val amountGbp = quote.totalMinor / 100.0
@@ -624,6 +703,25 @@ class LiveTvTipCoordinator(
                         message = message,
                         pinDigits = "",
                         hasUnresolvedPending = debitSubmitSession.pendingWalletDebit != null,
+                    ),
+            )
+        }
+    }
+
+    private fun reportQuoteFailure(message: String, target: QuoteFailureTarget) {
+        when (target) {
+            QuoteFailureTarget.Wallet -> setWalletPayFailed(message)
+            QuoteFailureTarget.Qr -> setQrPayFailed(message)
+        }
+    }
+
+    private fun setQrPayFailed(message: String) {
+        _state.update {
+            it.copy(
+                qrPay =
+                    LiveTvQrPayState(
+                        phase = LiveTvQrPayPhase.Failed,
+                        message = message,
                     ),
             )
         }

@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.telepse.tips.LiveTvQrPayPhase
 import com.example.telepse.tips.LiveTvTipUiState
 import com.example.telepse.tips.LiveTvWalletPayPhase
 import com.example.telepse.tips.TipQrCheckoutAvailability
@@ -39,18 +40,24 @@ fun LiveTvTipDrawer(
     onRemove: (String) -> Unit,
     onClear: () -> Unit,
     onStartWalletCheckout: () -> Unit,
+    onStartQrCheckout: () -> Unit,
     onWalletPinDigit: (Char) -> Unit,
     onWalletPinBackspace: () -> Unit,
     onSubmitWalletCheckout: () -> Unit,
     onCancelWalletCheckout: () -> Unit,
     onDismissWalletPending: () -> Unit,
+    onCancelQrCheckout: () -> Unit,
     onAcknowledgeWalletSuccess: () -> Unit,
+    onAcknowledgeQrSuccess: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val closeFocus = remember { FocusRequester() }
     val payFocus = remember { FocusRequester() }
     val walletPay = tip.walletPay
-    val showPayUi = walletPay.isActive
+    val qrPay = tip.qrPay
+    val showWalletPayUi = walletPay.isActive
+    val showQrPayUi = qrPay.isActive && !showWalletPayUi
+    val showPayUi = showWalletPayUi || showQrPayUi
 
     LaunchedEffect(showPayUi) {
         if (showPayUi) {
@@ -76,28 +83,40 @@ fun LiveTvTipDrawer(
                     .padding(24.dp)
                     .verticalScroll(rememberScrollState()),
         ) {
-            if (showPayUi) {
-                LiveTvWalletPayPanel(
-                    tip = tip,
-                    payFocus = payFocus,
-                    onPinDigit = onWalletPinDigit,
-                    onPinBackspace = onWalletPinBackspace,
-                    onSubmit = onSubmitWalletCheckout,
-                    onCancel = onCancelWalletCheckout,
-                    onDismissPending = onDismissWalletPending,
-                    onAcknowledgeSuccess = onAcknowledgeWalletSuccess,
-                )
-            } else {
-                LiveTvTipCartPanel(
-                    tip = tip,
-                    closeFocus = closeFocus,
-                    onClose = onClose,
-                    onIncrement = onIncrement,
-                    onDecrement = onDecrement,
-                    onRemove = onRemove,
-                    onClear = onClear,
-                    onStartWalletCheckout = onStartWalletCheckout,
-                )
+            when {
+                showWalletPayUi -> {
+                    LiveTvWalletPayPanel(
+                        tip = tip,
+                        payFocus = payFocus,
+                        onPinDigit = onWalletPinDigit,
+                        onPinBackspace = onWalletPinBackspace,
+                        onSubmit = onSubmitWalletCheckout,
+                        onCancel = onCancelWalletCheckout,
+                        onDismissPending = onDismissWalletPending,
+                        onAcknowledgeSuccess = onAcknowledgeWalletSuccess,
+                    )
+                }
+                showQrPayUi -> {
+                    LiveTvQrPayPanel(
+                        tip = tip,
+                        payFocus = payFocus,
+                        onCancel = onCancelQrCheckout,
+                        onAcknowledgeSuccess = onAcknowledgeQrSuccess,
+                    )
+                }
+                else -> {
+                    LiveTvTipCartPanel(
+                        tip = tip,
+                        closeFocus = closeFocus,
+                        onClose = onClose,
+                        onIncrement = onIncrement,
+                        onDecrement = onDecrement,
+                        onRemove = onRemove,
+                        onClear = onClear,
+                        onStartWalletCheckout = onStartWalletCheckout,
+                        onStartQrCheckout = onStartQrCheckout,
+                    )
+                }
             }
         }
     }
@@ -113,6 +132,7 @@ private fun LiveTvTipCartPanel(
     onRemove: (String) -> Unit,
     onClear: () -> Unit,
     onStartWalletCheckout: () -> Unit,
+    onStartQrCheckout: () -> Unit,
 ) {
     Text(
         text = "Tip cart",
@@ -241,18 +261,24 @@ private fun LiveTvTipCartPanel(
         )
     }
 
+    val qrLabel =
+        when {
+            tip.cart.isEmpty -> "QR / card — add tips first"
+            tip.checkout.qrCard == TipQrCheckoutAvailability.Available -> "Pay with QR / card"
+            else -> "QR / card — sign in required"
+        }
     TvPlayerControlChip(
-        label = "QR / card checkout — unavailable",
-        onClick = { },
+        label = qrLabel,
+        onClick = onStartQrCheckout,
         enabled = tip.checkout.canEnterQrCheckout,
         modifier = Modifier.padding(bottom = 8.dp),
     )
-    if (tip.checkout.qrCard == TipQrCheckoutAvailability.BackendUnavailable) {
+    if (tip.checkout.qrCard == TipQrCheckoutAvailability.RequiresSignIn &&
+        !tip.cart.isEmpty
+    ) {
         Text(
-            text =
-                "TV tip checkout sessions (/c/{token}) are not deployed on the backend. " +
-                    "No placeholder QR is shown.",
-            color = Color(0xFFFFB4A8),
+            text = "Sign in as a tipper to create a checkout session on this TV.",
+            color = TvAppColors.TextSecondary,
             fontSize = 12.sp,
             modifier = Modifier.padding(bottom = 16.dp),
         )
@@ -412,6 +438,92 @@ private fun LiveTvWalletPayPanel(
             label = "Back to cart",
             onClick = onCancel,
             focusRequester = if (pay.phase == LiveTvWalletPayPhase.CheckingPrerequisites) payFocus else null,
+        )
+    }
+}
+
+@Composable
+private fun LiveTvQrPayPanel(
+    tip: LiveTvTipUiState,
+    payFocus: FocusRequester,
+    onCancel: () -> Unit,
+    onAcknowledgeSuccess: () -> Unit,
+) {
+    val pay = tip.qrPay
+    Text(
+        text = "QR / card checkout",
+        color = TvAppColors.TextPrimary,
+        fontSize = 24.sp,
+        fontWeight = FontWeight.Bold,
+    )
+    Text(
+        text =
+            when (pay.phase) {
+                LiveTvQrPayPhase.CreatingSession -> "Creating checkout…"
+                LiveTvQrPayPhase.AwaitingPhonePayment -> "Waiting for phone payment"
+                LiveTvQrPayPhase.Paid -> "Payment confirmed"
+                LiveTvQrPayPhase.Failed -> "Checkout failed"
+                LiveTvQrPayPhase.Expired -> "Checkout expired"
+                LiveTvQrPayPhase.Cancelled -> "Checkout cancelled"
+                LiveTvQrPayPhase.Idle -> "QR checkout"
+            },
+        color = TvAppColors.TextSecondary,
+        fontSize = 14.sp,
+        modifier = Modifier.padding(bottom = 12.dp),
+    )
+    pay.message?.let { msg ->
+        Text(
+            text = msg,
+            color =
+                when (pay.phase) {
+                    LiveTvQrPayPhase.Paid -> TvAppColors.FocusRingSecondary
+                    LiveTvQrPayPhase.Failed,
+                    LiveTvQrPayPhase.Expired,
+                    -> Color(0xFFFFB4A8)
+                    else -> TvAppColors.TextPrimary
+                },
+            fontSize = 14.sp,
+            modifier = Modifier.padding(bottom = 12.dp),
+        )
+    }
+    pay.expiresAtIso?.let { exp ->
+        Text(
+            text = "Session expires: $exp",
+            color = TvAppColors.TextSecondary,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+    }
+    val url = pay.checkoutUrl
+    if (pay.phase == LiveTvQrPayPhase.AwaitingPhonePayment && !url.isNullOrBlank()) {
+        LiveTvQrCodeImage(
+            content = url,
+            modifier =
+                Modifier
+                    .padding(vertical = 12.dp)
+                    .fillMaxWidth(0.85f),
+            sizePx = 400,
+        )
+        Text(
+            text = "Scan with your phone camera or QR app.",
+            color = TvAppColors.TextSecondary,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(bottom = 12.dp),
+        )
+    }
+    if (pay.phase == LiveTvQrPayPhase.Paid) {
+        TvPlayerControlChip(
+            label = "Done",
+            onClick = onAcknowledgeSuccess,
+            focusRequester = payFocus,
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+    }
+    if (pay.phase != LiveTvQrPayPhase.CreatingSession && pay.phase != LiveTvQrPayPhase.Paid) {
+        TvPlayerControlChip(
+            label = "Back to cart",
+            onClick = onCancel,
+            focusRequester = if (pay.phase == LiveTvQrPayPhase.AwaitingPhonePayment) payFocus else null,
         )
     }
 }

@@ -446,6 +446,19 @@ class TipsWalletViewModelSubmitTest {
             debitCalls.add(request to idempotencyKey)
             return debitResults.removeFirst()
         }
+
+        override suspend fun createTvTipCheckoutSession(
+            request: com.example.telepse.data.model.CreateTvTipCheckoutSessionRequest,
+        ): Result<com.example.telepse.data.model.CreateTvTipCheckoutSessionResponse> =
+            Result.failure(UnsupportedOperationException("not used"))
+
+        override suspend fun fetchTvTipCheckoutSessionStatus(
+            sessionId: String,
+        ): Result<com.example.telepse.data.model.TvTipCheckoutSessionStatusResponse> =
+            Result.failure(UnsupportedOperationException("not used"))
+
+        override suspend fun cancelTvTipCheckoutSession(sessionId: String): Result<Unit> =
+            Result.failure(UnsupportedOperationException("not used"))
     }
 
     private class SuspendingWalletOperations : RecordingWalletOperations() {
