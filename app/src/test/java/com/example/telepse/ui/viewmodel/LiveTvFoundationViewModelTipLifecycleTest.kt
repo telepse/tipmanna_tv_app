@@ -55,16 +55,7 @@ class LiveTvFoundationViewModelTipLifecycleTest {
     fun tipDrawerOpenClose_doesNotBumpWebViewAttachKey() =
         runTest {
             val context = ApplicationProvider.getApplicationContext<Context>()
-            val vm =
-                LiveTvFoundationViewModel(
-                    scheduleSource = FakeTvScheduleSource(),
-                    refreshSignals = FakeTvScheduleRefreshSignals(),
-                    sessionExpiryHandler = SessionExpiryHandler(NoOpTipperSession()),
-                    analytics = TvAnalyticsClient(HttpClient(MockEngine { respondOk() })),
-                    walletOperations = FakeWalletOperations(),
-                    debitSubmitSession = WalletDebitSubmitSession.createForTests(MemoryWalletDebitPendingPersistence()),
-                    sessionStore = SessionStore.createPlainForUnitTests(context),
-                )
+            val vm = liveTvFoundationViewModelForTests(context, NoOpTipperSession())
             runCurrent()
 
             val keyBefore = vm.webViewAttachKey

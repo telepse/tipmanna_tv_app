@@ -12,6 +12,16 @@ import kotlinx.serialization.Serializable
  * The app will match these names against the event's character list.
  */
 @Serializable
+data class ResolvedTipCharacter(
+    val name: String = "",
+    val iconUrl: String = "",
+    val styleName: String? = null,
+    val characterId: String? = null,
+    val occurrenceIndex: Int? = null,
+    val occurrenceId: String? = null,
+)
+
+@Serializable
 data class TipAnimationEvent(
     val selectedTips: List<String>, // Array of character names
     val amount: Double = 0.0,
@@ -24,6 +34,8 @@ data class TipAnimationEvent(
     val playbackEndsAt: Long? = null,
     val rewardTurbo: Boolean? = null,
     val rewardGalaxy: Boolean? = null,
+    /** Authoritative animation assets from backend (preferred over catalog lookup). */
+    val resolvedTips: List<ResolvedTipCharacter>? = null,
 )
 
 /**

@@ -9,6 +9,8 @@ import com.example.telepse.analytics.TvAnalyticsClipMode
 import com.example.telepse.analytics.TvAnalyticsSurfaces
 import com.example.telepse.data.auth.SessionExpiryHandler
 import com.example.telepse.data.auth.SessionStore
+import com.example.telepse.data.realtime.PusherService
+import com.example.telepse.data.repository.AnimationContractRepository
 import com.example.telepse.data.repository.WalletOperations
 import com.example.telepse.livetv.LiveScheduleScope
 import com.example.telepse.livetv.TvModeEngine
@@ -18,8 +20,10 @@ import com.example.telepse.livetv.TvScheduleRefreshSignals
 import com.example.telepse.livetv.TvScheduleSource
 import com.example.telepse.player.WebViewYouTubePlayerAdapter
 import com.example.telepse.player.YouTubePlayerState
+import com.example.telepse.tips.LiveTvTipAnimationHost
 import com.example.telepse.tips.LiveTvTipCoordinator
 import com.example.telepse.tips.LiveTvTipUiState
+import com.example.telepse.tips.liveTvTipCatalogCharacters
 import com.example.telepse.tips.LiveTvQrPayPhase
 import com.example.telepse.tips.LiveTvWalletPayPhase
 import com.example.telepse.tips.WalletDebitSubmitSession
@@ -41,6 +45,7 @@ data class LiveTvUiState(
     val showSchedulePanel: Boolean = false,
     val tip: LiveTvTipUiState = LiveTvTipUiState(),
     val userStatusLine: String = "",
+    val pendingAnimations: List<AnimationTrigger> = emptyList(),
 )
 
 @HiltViewModel
@@ -52,6 +57,8 @@ class LiveTvFoundationViewModel @Inject constructor(
     walletOperations: WalletOperations,
     debitSubmitSession: WalletDebitSubmitSession,
     private val sessionStore: SessionStore,
+    pusherService: PusherService,
+    animationContractRepository: AnimationContractRepository,
 ) : ViewModel() {
 
     // Must be initialized before [init]: viewModelScope uses Main.immediate, so the analytics
@@ -75,6 +82,13 @@ class LiveTvFoundationViewModel @Inject constructor(
             onSessionAuthFailure = { sessionExpiryHandler.invalidateSessionIfNeeded(it) },
         )
 
+    private val tipAnimationHost =
+        LiveTvTipAnimationHost(
+            pusherService = pusherService,
+            animationContractRepository = animationContractRepository,
+            scope = viewModelScope,
+        )
+
     init {
         analytics.setContext(surface = TvAnalyticsSurfaces.TV_LOOPER)
         viewModelScope.launch {
@@ -96,6 +110,15 @@ class LiveTvFoundationViewModel @Inject constructor(
                 .distinctUntilChanged()
                 .collect { eventId ->
                     tipCoordinator.onProgrammeEventId(eventId)
+                    tipAnimationHost.onProgrammeEventChanged(eventId)
+                }
+        }
+        viewModelScope.launch {
+            tipCoordinator.state
+                .map { liveTvTipCatalogCharacters(it) }
+                .distinctUntilChanged()
+                .collect { characters ->
+                    tipAnimationHost.updateCatalog(characters)
                 }
         }
         viewModelScope.launch {
@@ -121,7 +144,8 @@ class LiveTvFoundationViewModel @Inject constructor(
             isMuted,
             showSchedulePanel,
             tipCoordinator.state,
-        ) { engineState, muted, scheduleOpen, tip ->
+            tipAnimationHost.pendingAnimations,
+        ) { engineState, muted, scheduleOpen, tip, animations ->
             LiveTvUiState(
                 engine = engineState,
                 scheduleScope = LiveScheduleScope.Global,
@@ -129,6 +153,7 @@ class LiveTvFoundationViewModel @Inject constructor(
                 showSchedulePanel = scheduleOpen,
                 tip = tip,
                 userStatusLine = buildUserStatusLine(engineState),
+                pendingAnimations = animations,
             )
         // Eager: tip cart/strip must stay synced without depending on Compose collectors.
         }.stateIn(viewModelScope, SharingStarted.Eagerly, LiveTvUiState())
@@ -137,10 +162,12 @@ class LiveTvFoundationViewModel @Inject constructor(
 
     fun onEnter() {
         engine.start()
+        tipAnimationHost.start()
     }
 
     fun onLeave() {
         showSchedulePanel.value = false
+        tipAnimationHost.stop()
         tipCoordinator.reset()
         engine.stop()
     }
@@ -203,7 +230,15 @@ class LiveTvFoundationViewModel @Inject constructor(
 
     fun selectTipCharacter(characterId: String) {
         showSchedulePanel.value = false
+        val character =
+            liveTvTipCatalogCharacters(tipCoordinator.state.value)
+                .firstOrNull { it.id == characterId }
         tipCoordinator.selectCharacter(characterId)
+        character?.let { tipAnimationHost.previewSelect(it) }
+    }
+
+    fun removeTipAnimation(animation: AnimationTrigger) {
+        tipAnimationHost.removeAnimation(animation)
     }
 
     fun incrementTipQuantity(characterId: String) {
@@ -368,6 +403,7 @@ class LiveTvFoundationViewModel @Inject constructor(
 
     override fun onCleared() {
         analytics.flushAsync()
+        tipAnimationHost.stop()
         tipCoordinator.reset()
         engine.dispose()
         super.onCleared()

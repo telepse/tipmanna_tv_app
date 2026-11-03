@@ -50,14 +50,13 @@ import com.example.telepse.R
 import com.example.telepse.data.network.NetworkMonitor
 import com.example.telepse.ui.network.NetworkStatusIndicator
 import com.example.telepse.ui.network.rememberNetworkMonitor
-import com.example.telepse.ui.animations.CharacterAnimation
 import com.example.telepse.ui.background.EventBackgroundMedia
 import com.example.telepse.ui.background.resolveEventBackgroundMedia
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.telepse.ui.theme.*
 import com.example.telepse.ui.tv.tvFocusRing
-import com.example.telepse.ui.viewmodel.AnimationTrigger
+import com.example.telepse.ui.animations.TipAnimationOverlay
 import com.example.telepse.ui.viewmodel.FundraisingMilestoneViewModel
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
@@ -587,11 +586,9 @@ fun FundraisingMilestoneScreen(
             }
             
             // Animation Overlay - MUST be last to appear on top of everything
-            AnimationOverlay(
+            TipAnimationOverlay(
                 animations = uiState.pendingAnimations,
-                onAnimationComplete = { animation ->
-                    viewModel.removeAnimation(animation)
-                }
+                onAnimationComplete = viewModel::removeAnimation,
             )
         }
     } else if (uiState.isLoading || (event != null && event.id != eventId)) {
@@ -1008,61 +1005,6 @@ private fun generateQRCode(content: String, size: Int): Bitmap? {
     } catch (e: Exception) {
         e.printStackTrace()
         null
-    }
-}
-
-/**
- * Composable that displays multiple character animations as an overlay.
- * 
- * This composable handles displaying animations triggered by Pusher events.
- * Each animation is displayed independently and can overlap.
- * Animations are removed when they complete.
- * 
- * The overlay is positioned on top of all other content using zIndex.
- * 
- * @param animations List of animation triggers to display
- * @param onAnimationComplete Callback when an animation completes
- */
-@Composable
-private fun AnimationOverlay(
-    animations: List<AnimationTrigger>,
-    onAnimationComplete: (AnimationTrigger) -> Unit
-) {
-    val context = LocalContext.current
-    
-    if (animations.isEmpty()) {
-        android.util.Log.d("AnimationOverlay", "📭 No animations to display")
-        return
-    }
-    
-    // Only display the FIRST animation in the queue (sequential playback)
-    val currentAnimation = animations.first()
-    val queueSize = animations.size
-    
-    android.util.Log.d("AnimationOverlay", "🎬 Queue: $queueSize animations, displaying: ${currentAnimation.animationType} (id: ${currentAnimation.id})")
-    
-    // Display only the first animation - sequential playback
-    // Use zIndex to ensure animations appear on top of all content
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .zIndex(1000f) // High z-index to ensure it's on top
-    ) {
-        // Use the unique ID as the key to ensure Compose properly tracks each animation
-        key(currentAnimation.id) {
-            android.util.Log.d("AnimationOverlay", "🎨 Rendering animation: ${currentAnimation.animationType} (id: ${currentAnimation.id})")
-            CharacterAnimation(
-                animationType = currentAnimation.animationType,
-                imageUrl = currentAnimation.imageUrl,
-                modifier = Modifier.fillMaxSize(),
-                onAnimationComplete = {
-                    android.util.Log.d("AnimationOverlay", "✅ Animation ${currentAnimation.id} (${currentAnimation.animationType}) completed, removing from queue")
-                    android.util.Log.d("AnimationOverlay", "   - Remaining in queue: ${queueSize - 1}")
-                    onAnimationComplete(currentAnimation)
-                    // The next animation will automatically start since the list updates
-                }
-            )
-        }
     }
 }
 

@@ -9,10 +9,12 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -21,6 +23,9 @@ import com.example.telepse.data.display.ScreenDisplaySessionStore
 import com.example.telepse.data.repository.AuthRepository
 import com.example.telepse.ui.navigation.NavigationBackResolver
 import com.example.telepse.ui.navigation.Screen
+import com.example.telepse.ui.navigation.initialAppScreen
+import com.example.telepse.ui.navigation.screenDisplayRestoreTarget
+import com.example.telepse.ui.navigation.shouldScheduleScreenDisplayRestoreOnStart
 import com.example.telepse.ui.screen.CodeInputScreen
 import com.example.telepse.ui.screen.CommunityRoomDisplayScreen
 import com.example.telepse.ui.screen.CommunityRoomIdScreen
@@ -86,30 +91,50 @@ fun TelepseApp(
     authRepository: AuthRepository,
     screenDisplaySessionStore: ScreenDisplaySessionStore,
 ) {
-    var currentScreen by remember {
-        mutableStateOf<Screen>(
-            screenDisplaySessionStore.lastEventId()?.let { savedId ->
-                Log.d(NAV_LOG_TAG, "resume Screen Display eventId=$savedId")
-                Screen.FundraisingMilestone(savedId)
-            } ?: Screen.JourneyHub,
-        )
-    }
+    var currentScreen by remember { mutableStateOf<Screen>(initialAppScreen()) }
 
-    // After TV sleep/wake or process death that lands on Hub while a session is still
-    // saved (transient pause ≠ explicit exit), restore Screen Display.
+    var deferScreenDisplayRestore by remember { mutableStateOf(false) }
+    var isFirstOnStartSinceProcessLaunched by remember { mutableStateOf(true) }
+
+    // After TV sleep/wake (not cold process start), restore Screen Display — after first frame.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer =
             LifecycleEventObserver { _, event ->
                 if (event != Lifecycle.Event.ON_START) return@LifecycleEventObserver
-                val savedId = screenDisplaySessionStore.lastEventId() ?: return@LifecycleEventObserver
-                if (currentScreen is Screen.JourneyHub) {
-                    Log.d(NAV_LOG_TAG, "ON_START restore Screen Display eventId=$savedId")
-                    currentScreen = Screen.FundraisingMilestone(savedId)
+                val savedId = screenDisplaySessionStore.lastEventId()
+                val firstStart = isFirstOnStartSinceProcessLaunched
+                if (firstStart) {
+                    isFirstOnStartSinceProcessLaunched = false
+                }
+                if (
+                    shouldScheduleScreenDisplayRestoreOnStart(
+                        isFirstOnStartSinceProcessLaunched = firstStart,
+                        savedEventId = savedId,
+                        currentScreen = currentScreen,
+                    )
+                ) {
+                    Log.d(NAV_LOG_TAG, "ON_START schedule Screen Display restore eventId=$savedId")
+                    deferScreenDisplayRestore = true
                 }
             }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(deferScreenDisplayRestore) {
+        if (!deferScreenDisplayRestore) return@LaunchedEffect
+        deferScreenDisplayRestore = false
+        withFrameMillis { }
+        val target =
+            screenDisplayRestoreTarget(
+                screenDisplaySessionStore.lastEventId(),
+                currentScreen,
+            )
+        if (target != null) {
+            Log.d(NAV_LOG_TAG, "deferred restore Screen Display eventId=${(target as Screen.FundraisingMilestone).eventId}")
+            currentScreen = target
+        }
     }
 
     BackHandler(enabled = currentScreen !is Screen.JourneyHub) {

@@ -54,15 +54,7 @@ class LiveTvFoundationViewModelWebViewLifecycleTest {
 
     private fun viewModel(): LiveTvFoundationViewModel {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        return LiveTvFoundationViewModel(
-            scheduleSource = FakeTvScheduleSource(),
-            refreshSignals = FakeTvScheduleRefreshSignals(),
-            sessionExpiryHandler = SessionExpiryHandler(NoOpTipperSession()),
-            analytics = TvAnalyticsClient(HttpClient(MockEngine { respondOk() })),
-            walletOperations = FakeWalletOperations(),
-            debitSubmitSession = WalletDebitSubmitSession.createForTests(MemoryWalletDebitPendingPersistence()),
-            sessionStore = SessionStore.createPlainForUnitTests(context),
-        )
+        return liveTvFoundationViewModelForTests(context, NoOpTipperSession())
     }
 
     private fun newWebView(): WebView =

@@ -39,6 +39,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import com.example.telepse.BuildConfig
 import com.example.telepse.livetv.TvModeEnginePhase
+import com.example.telepse.ui.animations.TipAnimationOverlay
 import com.example.telepse.ui.livetv.LiveTvTipDrawer
 import com.example.telepse.ui.livetv.LiveTvTipPreviewStrip
 import com.example.telepse.ui.tv.TvAppColors
@@ -66,6 +67,7 @@ fun LiveTvFoundationScreen(
     val pauseFocus = remember { FocusRequester() }
     val muteFocus = remember { FocusRequester() }
     val seekFocus = remember { FocusRequester() }
+    val firstTipChipFocus = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
         viewModel.onEnter()
@@ -251,6 +253,8 @@ fun LiveTvFoundationScreen(
                 onSelectCharacter = viewModel::selectTipCharacter,
                 onOpenCart = viewModel::openTipDrawer,
                 onRetry = viewModel::refreshTipCatalog,
+                firstChipFocusRequester = firstTipChipFocus,
+                tipsControlFocusRequester = tipsFocus,
                 modifier =
                     Modifier
                         .align(Alignment.BottomStart)
@@ -302,6 +306,7 @@ fun LiveTvFoundationScreen(
                     focusRequester = tipsFocus,
                     focusChainLeft = scheduleFocus,
                     focusChainRight = refreshFocus,
+                    focusChainUp = firstTipChipFocus,
                 )
                 TvPlayerControlChip(
                     label = "Refresh",
@@ -341,14 +346,22 @@ fun LiveTvFoundationScreen(
             }
         }
 
+        TipAnimationOverlay(
+            animations = uiState.pendingAnimations,
+            onAnimationComplete = viewModel::removeTipAnimation,
+        )
+
         if (BuildConfig.DEBUG) {
             Text(
                 text =
                     buildString {
                         append("DBG gen=")
-                        append(engine.refreshGeneration)
                         append(" phase=")
                         append(engine.phase.name)
+                        append(" animQ=")
+                        append(uiState.pendingAnimations.size)
+                        append(" gen=")
+                        append(engine.refreshGeneration)
                         append(" player=")
                         append(engine.playerState.name)
                         append(" pos=")

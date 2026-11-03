@@ -87,15 +87,7 @@ class LiveTvFoundationViewModelInitTest {
 
     private fun createViewModel(): LiveTvFoundationViewModel {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        return LiveTvFoundationViewModel(
-            scheduleSource = FakeTvScheduleSource(),
-            refreshSignals = FakeTvScheduleRefreshSignals(),
-            sessionExpiryHandler = SessionExpiryHandler(NoOpTipperSession()),
-            analytics = TvAnalyticsClient(HttpClient(MockEngine { respondOk() })),
-            walletOperations = FakeWalletOperations(),
-            debitSubmitSession = WalletDebitSubmitSession.createForTests(MemoryWalletDebitPendingPersistence()),
-            sessionStore = SessionStore.createPlainForUnitTests(context),
-        )
+        return liveTvFoundationViewModelForTests(context, NoOpTipperSession())
     }
 
     private class NoOpTipperSession : TipperSession {

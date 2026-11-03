@@ -51,6 +51,31 @@ class LiveScheduleTargetResolverTest {
     }
 
     @Test
+    fun resolve_youtubeLiveChannelUrl() {
+        val schedule =
+            FakeTvScheduleSource.sampleSchedule("Ffs0YHm2jks", 0).copy(
+                livePosition =
+                    com.example.telepse.data.model.TvLivePosition(
+                        scheduleIndex = 0,
+                        offsetSeconds = 0,
+                    ),
+                items =
+                    listOf(
+                        com.example.telepse.data.model.TvScheduleItem(
+                            channel =
+                                com.example.telepse.data.model.TvScheduleChannel(
+                                    url = "https://www.youtube.com/live/7NY3PAGzhBM",
+                                    eventId = "302b6dda-02ab-49ff-9bed-1e8f9378557c",
+                                ),
+                        ),
+                    ),
+            )
+        val target = LiveScheduleTargetResolver.resolve(schedule).getOrThrow()
+        assertEquals("7NY3PAGzhBM", target.videoId)
+        assertEquals("302b6dda-02ab-49ff-9bed-1e8f9378557c", target.eventId)
+    }
+
+    @Test
     fun resolve_malformedUrlFails() {
         val schedule =
             FakeTvScheduleSource.sampleSchedule("Ffs0YHm2jks", 0).copy(

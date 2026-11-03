@@ -32,19 +32,6 @@ import kotlinx.coroutines.delay
 import android.util.Log
 import javax.inject.Inject
 
-/**
- * Data class representing an animation trigger request.
- * 
- * @property animationType The type of animation to display
- * @property imageUrl URL of the character/emoji image
- * @property id Unique identifier for this animation instance
- */
-data class AnimationTrigger(
-    val animationType: AnimationType,
-    val imageUrl: String,
-    val id: String = java.util.UUID.randomUUID().toString()
-)
-
 data class FundraisingMilestoneUiState(
     val event: Event? = null,
     val isLoading: Boolean = false,

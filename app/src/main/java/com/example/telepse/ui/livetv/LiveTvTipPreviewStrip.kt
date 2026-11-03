@@ -18,7 +18,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import com.example.telepse.ui.tv.tvFocusChainVertical
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -49,6 +52,8 @@ fun LiveTvTipPreviewStrip(
     onOpenCart: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    firstChipFocusRequester: FocusRequester? = null,
+    tipsControlFocusRequester: FocusRequester? = null,
 ) {
     if (!tip.showStrip) return
 
@@ -92,11 +97,14 @@ fun LiveTvTipPreviewStrip(
             }
             LiveTvTipCatalogPhase.Ready -> {
                 TvLazyRow {
-                    tip.stripCharacters.forEach { character ->
+                    tip.stripCharacters.forEachIndexed { index, character ->
                         TipPreviewChip(
                             character = character,
                             quantityInCart = tip.cart.quantityOf(character.id),
                             onClick = { onSelectCharacter(character.id) },
+                            focusRequester = if (index == 0) firstChipFocusRequester else null,
+                            focusChainDown =
+                                if (index == 0) tipsControlFocusRequester else null,
                         )
                     }
                     if (!tip.cart.isEmpty) {
@@ -116,17 +124,25 @@ private fun TipPreviewChip(
     character: TipCharacterCatalogItem,
     quantityInCart: Int,
     onClick: () -> Unit,
+    focusRequester: FocusRequester? = null,
+    focusChainDown: FocusRequester? = null,
 ) {
     val shape = RoundedCornerShape(12.dp)
     var focused by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
+    var chipModifier =
+        Modifier
+            .padding(end = 10.dp)
+            .widthIn(max = 88.dp)
+    if (focusRequester != null) {
+        chipModifier = chipModifier.focusRequester(focusRequester)
+    }
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier =
-            Modifier
-                .padding(end = 10.dp)
-                .widthIn(max = 88.dp)
+            chipModifier
                 .border(
                     width = if (focused) 2.dp else 1.dp,
                     color =
@@ -140,14 +156,18 @@ private fun TipPreviewChip(
                 .background(Color(0xCC12121A), shape)
                 .onFocusChanged { focused = it.isFocused }
                 .focusable(true)
+                .tvFocusChainVertical(down = focusChainDown)
                 .onKeyEvent { event ->
-                    if (event.type == KeyEventType.KeyUp &&
-                        (event.key == Key.DirectionCenter || event.key == Key.Enter)
-                    ) {
-                        onClick()
-                        true
-                    } else {
-                        false
+                    if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                    when (event.key) {
+                        Key.DirectionCenter,
+                        Key.Enter,
+                        Key.NumPadEnter,
+                        -> {
+                            onClick()
+                            true
+                        }
+                        else -> false
                     }
                 }
                 .padding(8.dp),

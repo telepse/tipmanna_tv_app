@@ -23,6 +23,14 @@ class YoutubeVideoIdUtilTest {
     }
 
     @Test
+    fun fromUrl_youtubeLivePath() {
+        assertEquals(
+            "7NY3PAGzhBM",
+            YoutubeVideoIdUtil.fromUrl("https://www.youtube.com/live/7NY3PAGzhBM"),
+        )
+    }
+
+    @Test
     fun fromUrl_invalid() {
         assertNull(YoutubeVideoIdUtil.fromUrl("https://example.com/not-youtube"))
     }

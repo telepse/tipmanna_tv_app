@@ -43,6 +43,8 @@ fun TvPlayerControlChip(
     focusRequester: FocusRequester? = null,
     focusChainLeft: FocusRequester? = null,
     focusChainRight: FocusRequester? = null,
+    focusChainUp: FocusRequester? = null,
+    focusChainDown: FocusRequester? = null,
     enabled: Boolean = true,
 ) {
     val shape = RoundedCornerShape(12.dp)
@@ -86,7 +88,12 @@ fun TvPlayerControlChip(
             chipModifier
                 .onFocusChanged { focused = it.isFocused }
                 .focusable(enabled = enabled)
-                .tvFocusChain(left = focusChainLeft, right = focusChainRight)
+                .tvFocusChain(
+                    left = focusChainLeft,
+                    right = focusChainRight,
+                    up = focusChainUp,
+                    down = focusChainDown,
+                )
                 .onKeyEvent { event ->
                     if (!enabled || event.type != KeyEventType.KeyDown) return@onKeyEvent false
                     when (event.key) {

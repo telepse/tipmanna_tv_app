@@ -2,7 +2,7 @@ package com.example.telepse.player
 
 object YoutubeVideoIdUtil {
     private val videoIdPattern =
-        Regex("""(?:[?&]v=|/embed/|youtu\.be/|/shorts/)([A-Za-z0-9_-]{11})""")
+        Regex("""(?:[?&]v=|/embed/|youtu\.be/|/shorts/|/live/)([A-Za-z0-9_-]{11})""")
 
     fun fromUrl(url: String): String? {
         val trimmed = url.trim()
