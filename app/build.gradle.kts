@@ -13,11 +13,34 @@ android {
 
     defaultConfig {
         applicationId = "com.example.telepse"
-        minSdk = 21
+        minSdk = 23
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+    }
 
+    flavorDimensions += "environment"
+    productFlavors {
+        create("staging") {
+            dimension = "environment"
+            applicationIdSuffix = ".staging"
+            versionNameSuffix = "-staging"
+            // Documented staging API (STAGING-HANDOFF / Phase 1 audit)
+            buildConfigField(
+                "String",
+                "API_BASE_URL",
+                "\"https://tipmanna-staging.onrender.com\"",
+            )
+        }
+        create("prod") {
+            dimension = "environment"
+            // Documented production API (BACKEND_URL / prior ApiConfig)
+            buildConfigField(
+                "String",
+                "API_BASE_URL",
+                "\"https://tipmanna-live.onrender.com\"",
+            )
+        }
     }
 
     buildTypes {
@@ -38,6 +61,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -47,6 +71,7 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
+    implementation(libs.androidx.foundation)
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.tv.foundation)
@@ -73,6 +98,8 @@ dependencies {
     implementation(libs.ktor.client.websockets)
     implementation(libs.ktor.client.logging)
     
+    implementation("com.google.zxing:core:3.5.3")
+
     // Coroutines
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
@@ -97,8 +124,14 @@ dependencies {
     
     // Gson for JSON parsing
     implementation(libs.gson)
+    implementation(libs.androidx.security.crypto)
     
     androidTestImplementation(platform(libs.androidx.compose.bom))
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test:core:1.6.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("io.ktor:ktor-client-mock:3.0.3")
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)

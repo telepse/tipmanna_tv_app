@@ -9,7 +9,8 @@ data class Event(
     val organizationName: String? = null,
     val hostName: String,
     val eventType: String? = null,
-    val eventDate: String,
+    /** Nullable in API/DB (`DateTime?` in Prisma); venue lookup must still succeed. */
+    val eventDate: String? = null,
     val startTime: String,
     val endTime: String? = null,
     val venueName: String? = null,

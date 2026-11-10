@@ -1,6 +1,8 @@
 package com.example.telepse.ui.screen
 
+import android.app.Activity
 import android.net.Uri
+import android.view.WindowManager
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -27,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -47,10 +50,13 @@ import com.example.telepse.R
 import com.example.telepse.data.network.NetworkMonitor
 import com.example.telepse.ui.network.NetworkStatusIndicator
 import com.example.telepse.ui.network.rememberNetworkMonitor
-import com.example.telepse.ui.animations.CharacterAnimation
-import com.example.telepse.ui.background.getEventBackgroundResource
+import com.example.telepse.ui.background.EventBackgroundMedia
+import com.example.telepse.ui.background.resolveEventBackgroundMedia
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.telepse.ui.theme.*
-import com.example.telepse.ui.viewmodel.AnimationTrigger
+import com.example.telepse.ui.tv.tvFocusRing
+import com.example.telepse.ui.animations.TipAnimationOverlay
 import com.example.telepse.ui.viewmodel.FundraisingMilestoneViewModel
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
@@ -299,6 +305,16 @@ fun FundraisingMilestoneScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val networkMonitor = rememberNetworkMonitor()
+    val view = LocalView.current
+
+    // Venue Screen Display must not sleep while this surface is visible (device policy may still override).
+    DisposableEffect(view) {
+        val window = (view.context as? Activity)?.window
+        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
     
     // Fetch event details
     LaunchedEffect(eventId) {
@@ -311,30 +327,11 @@ fun FundraisingMilestoneScreen(
     // CRITICAL: Only render if event matches eventId to prevent stale data during transitions
     // If event data doesn't match eventId, treat it as loading state
     if (event != null && event.id == eventId) {
-        // Create ExoPlayerManager ONLY when we have the correct event data
-        // This prevents creating a player manager when UI state is null/mismatched
-        val playerManager = remember(eventId) {
-            android.util.Log.d("FundraisingMilestoneScreen", "🎬 Creating ExoPlayerManager for event: $eventId")
-            ExoPlayerManager(context)
-        }
-        
-        // Release ExoPlayerManager when eventId changes or screen leaves
-        DisposableEffect(eventId) {
-            android.util.Log.d("FundraisingMilestoneScreen", "🔧 [SCREEN] Event entered: $eventId")
-            
-            onDispose {
-                android.util.Log.d("FundraisingMilestoneScreen", "🧹 [SCREEN] Event leaving: $eventId - releasing ExoPlayerManager")
-                playerManager.release()
-                android.util.Log.d("FundraisingMilestoneScreen", "✅ ExoPlayerManager released for event: $eventId")
+        val backgroundMedia =
+            remember(event.backgroundType, event.eventBackground) {
+                resolveEventBackgroundMedia(event.eventBackground, event.backgroundType)
             }
-        }
-        // Get background resource based on event background type
-        val backgroundResourceId = getEventBackgroundResource(
-            backgroundType = event.backgroundType,
-            eventBackground = event.eventBackground
-        )
-        val backgroundUri = Uri.parse("android.resource://${context.packageName}/${backgroundResourceId}")
-        
+
         // Determine text color based on background type
         val textColor = getTextColorForBackground(event.backgroundType, event.eventBackground)
         
@@ -347,16 +344,41 @@ fun FundraisingMilestoneScreen(
                     .zIndex(2000f) // Above everything
             )
             
-            // Video Background - pass playerManager for synchronized operations
-            // CRITICAL: Use key() to ensure VideoBackground is completely recreated per event
-            // This cancels any pending LaunchedEffects from previous events
-            key(eventId) {
-                VideoBackground(
-                    uri = backgroundUri,
-                    resourceId = backgroundResourceId,
-                    playerManager = playerManager,
-                    modifier = Modifier.fillMaxSize()
-                )
+            when (val media = backgroundMedia) {
+                is EventBackgroundMedia.LocalRaw -> {
+                    val backgroundResourceId = media.resourceId
+                    val backgroundUri =
+                        Uri.parse(
+                            "android.resource://${context.packageName}/$backgroundResourceId",
+                        )
+                    val playerManager =
+                        remember(eventId, backgroundResourceId) {
+                            android.util.Log.d(
+                                "FundraisingMilestoneScreen",
+                                "🎬 Creating ExoPlayerManager for event=$eventId resource=$backgroundResourceId",
+                            )
+                            ExoPlayerManager(context)
+                        }
+                    DisposableEffect(eventId, backgroundResourceId) {
+                        onDispose {
+                            playerManager.release()
+                        }
+                    }
+                    key(eventId, backgroundResourceId) {
+                        VideoBackground(
+                            uri = backgroundUri,
+                            resourceId = backgroundResourceId,
+                            playerManager = playerManager,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+                is EventBackgroundMedia.RemoteImage -> {
+                    RemoteImageBackground(
+                        url = media.url,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
             
             // Content Overlay - Full height container
@@ -377,7 +399,10 @@ fun FundraisingMilestoneScreen(
                     // Back Arrow (Top Left)
                     IconButton(
                         onClick = onBackClick,
-                        modifier = Modifier.size(40.dp)
+                        modifier =
+                            Modifier
+                                .size(40.dp)
+                                .tvFocusRing(cornerRadiusDp = 8),
                     ) {
                         Icon(
                             imageVector = Icons.Default.ArrowBack,
@@ -390,7 +415,10 @@ fun FundraisingMilestoneScreen(
                     // Star Icon (Top Right)
                     IconButton(
                         onClick = { /* Handle favorite */ },
-                        modifier = Modifier.size(40.dp)
+                        modifier =
+                            Modifier
+                                .size(40.dp)
+                                .tvFocusRing(cornerRadiusDp = 8),
                     ) {
                         Icon(
                             imageVector = Icons.Default.Star,
@@ -481,7 +509,7 @@ fun FundraisingMilestoneScreen(
                             amountRaised = amountRaised,
                             amountToRaise = event.amountToRaise?.toInt() ?: 0,
                             textColor = textColor,
-                            hideAmountText = event.hideProgressBarAmount != true, // Reversed: backend has logic inverted
+                            showProgressAmounts = shouldShowProgressBarAmounts(event.hideProgressBarAmount),
                             shouldGlow = shouldGlow,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -558,11 +586,9 @@ fun FundraisingMilestoneScreen(
             }
             
             // Animation Overlay - MUST be last to appear on top of everything
-            AnimationOverlay(
+            TipAnimationOverlay(
                 animations = uiState.pendingAnimations,
-                onAnimationComplete = { animation ->
-                    viewModel.removeAnimation(animation)
-                }
+                onAnimationComplete = viewModel::removeAnimation,
             )
         }
     } else if (uiState.isLoading || (event != null && event.id != eventId)) {
@@ -619,7 +645,35 @@ fun FundraisingMilestoneScreen(
 }
 
 @Composable
-private fun VideoBackground(
+private fun RemoteImageBackground(
+    url: String,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    var loadFailed by remember(url) { mutableStateOf(false) }
+    if (loadFailed) {
+        Box(
+            modifier =
+                modifier.background(Color.Black),
+        )
+        return
+    }
+    AsyncImage(
+        model =
+            ImageRequest.Builder(context)
+                .data(url)
+                .crossfade(true)
+                .listener(
+                    onError = { _, _ -> loadFailed = true },
+                )
+                .build(),
+        contentDescription = null,
+        modifier = modifier,
+    )
+}
+
+@Composable
+internal fun VideoBackground(
     uri: Uri,
     resourceId: Int,
     playerManager: ExoPlayerManager,
@@ -704,7 +758,7 @@ fun ProgressBarSection(
     amountRaised: Int,
     amountToRaise: Int,
     textColor: Color,
-    hideAmountText: Boolean = false,
+    showProgressAmounts: Boolean = true,
     shouldGlow: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -786,8 +840,7 @@ fun ProgressBarSection(
         
         // Row with three items below the progress bar: Amount Raised (left), tipmanna.com (center), Target (right)
         // All three on the same row, with target aligned to be beneath the icon
-        // Hide this row when hideAmountText is true
-        if (!hideAmountText) {
+        if (showProgressAmounts) {
             // Match the exact width of progress bar (320.dp) + spacing (16.dp) + icon (36.dp) = 372.dp
             Box(
                 modifier = Modifier
@@ -952,61 +1005,6 @@ private fun generateQRCode(content: String, size: Int): Bitmap? {
     } catch (e: Exception) {
         e.printStackTrace()
         null
-    }
-}
-
-/**
- * Composable that displays multiple character animations as an overlay.
- * 
- * This composable handles displaying animations triggered by Pusher events.
- * Each animation is displayed independently and can overlap.
- * Animations are removed when they complete.
- * 
- * The overlay is positioned on top of all other content using zIndex.
- * 
- * @param animations List of animation triggers to display
- * @param onAnimationComplete Callback when an animation completes
- */
-@Composable
-private fun AnimationOverlay(
-    animations: List<AnimationTrigger>,
-    onAnimationComplete: (AnimationTrigger) -> Unit
-) {
-    val context = LocalContext.current
-    
-    if (animations.isEmpty()) {
-        android.util.Log.d("AnimationOverlay", "📭 No animations to display")
-        return
-    }
-    
-    // Only display the FIRST animation in the queue (sequential playback)
-    val currentAnimation = animations.first()
-    val queueSize = animations.size
-    
-    android.util.Log.d("AnimationOverlay", "🎬 Queue: $queueSize animations, displaying: ${currentAnimation.animationType} (id: ${currentAnimation.id})")
-    
-    // Display only the first animation - sequential playback
-    // Use zIndex to ensure animations appear on top of all content
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .zIndex(1000f) // High z-index to ensure it's on top
-    ) {
-        // Use the unique ID as the key to ensure Compose properly tracks each animation
-        key(currentAnimation.id) {
-            android.util.Log.d("AnimationOverlay", "🎨 Rendering animation: ${currentAnimation.animationType} (id: ${currentAnimation.id})")
-            CharacterAnimation(
-                animationType = currentAnimation.animationType,
-                imageUrl = currentAnimation.imageUrl,
-                modifier = Modifier.fillMaxSize(),
-                onAnimationComplete = {
-                    android.util.Log.d("AnimationOverlay", "✅ Animation ${currentAnimation.id} (${currentAnimation.animationType}) completed, removing from queue")
-                    android.util.Log.d("AnimationOverlay", "   - Remaining in queue: ${queueSize - 1}")
-                    onAnimationComplete(currentAnimation)
-                    // The next animation will automatically start since the list updates
-                }
-            )
-        }
     }
 }
 

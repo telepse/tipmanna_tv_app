@@ -7,7 +7,16 @@ import com.example.telepse.data.model.Event
 import com.example.telepse.data.model.TipAnimationEvent
 import com.example.telepse.data.network.NetworkMonitor
 import com.example.telepse.data.realtime.PusherService
-import com.example.telepse.data.repository.EventRepository
+import com.example.telepse.data.model.TvEventRealtimeHints
+import com.example.telepse.data.repository.AnimationContractRepository
+import com.example.telepse.data.model.ScreenDisplayStatePayload
+import com.example.telepse.data.realtime.DEFAULT_SCREEN_DISPLAY_STATE_EVENT
+import com.example.telepse.data.realtime.ScreenDisplayStateApplier
+import com.example.telepse.data.auth.SessionExpiryHandler
+import com.example.telepse.data.network.AuthenticatedApiHttpException
+import com.example.telepse.data.network.AuthenticatedApiUserMessages
+import com.example.telepse.data.repository.TvEventBootstrapRepository
+import com.example.telepse.player.TipAnimationGuard
 import com.example.telepse.ui.animations.AnimationType
 import com.example.telepse.ui.animations.AnimationTypeMapper
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -23,19 +32,6 @@ import kotlinx.coroutines.delay
 import android.util.Log
 import javax.inject.Inject
 
-/**
- * Data class representing an animation trigger request.
- * 
- * @property animationType The type of animation to display
- * @property imageUrl URL of the character/emoji image
- * @property id Unique identifier for this animation instance
- */
-data class AnimationTrigger(
-    val animationType: AnimationType,
-    val imageUrl: String,
-    val id: String = java.util.UUID.randomUUID().toString()
-)
-
 data class FundraisingMilestoneUiState(
     val event: Event? = null,
     val isLoading: Boolean = false,
@@ -45,16 +41,23 @@ data class FundraisingMilestoneUiState(
 
 @HiltViewModel
 class FundraisingMilestoneViewModel @Inject constructor(
-    private val eventRepository: EventRepository,
+    private val tvEventBootstrapRepository: TvEventBootstrapRepository,
+    private val sessionExpiryHandler: SessionExpiryHandler,
     private val pusherService: PusherService,
-    private val networkMonitor: NetworkMonitor
+    private val networkMonitor: NetworkMonitor,
+    private val animationContractRepository: AnimationContractRepository,
 ) : ViewModel() {
+    
+    private val tipAnimationGuard = TipAnimationGuard(AnimationContractRepository.DEFAULT_STALE_MS)
     
     private val _uiState = MutableStateFlow(FundraisingMilestoneUiState())
     val uiState: StateFlow<FundraisingMilestoneUiState> = _uiState.asStateFlow()
     
     private var currentEventId: String? = null
     private var isPusherInitialized = false
+    private var realtimePipelineReady = false
+    private var activePublicChannelName: String? = null
+    private var activeScreenDisplayEventName: String = DEFAULT_SCREEN_DISPLAY_STATE_EVENT
     private var flowJobs: MutableList<kotlinx.coroutines.Job> = mutableListOf()
     
     // CRITICAL: Mutex ensures only one event switch at a time
@@ -171,6 +174,7 @@ class FundraisingMilestoneViewModel @Inject constructor(
                     Log.e("FundraisingMilestoneViewModel", "Error disconnecting Pusher", e)
                 }
                 isPusherInitialized = false
+                realtimePipelineReady = false
                 currentEventId = null
                 
                 // Wait for cleanup to settle
@@ -199,14 +203,18 @@ class FundraisingMilestoneViewModel @Inject constructor(
         }
         
         try {
-            Log.d("FundraisingMilestoneViewModel", "   [STEP 3] Fetching event details from repository...")
-            // Fetch event details first
-            val result = eventRepository.getEventById(eventId)
+            Log.d("FundraisingMilestoneViewModel", "   [STEP 3] Fetching tv-app bootstrap from repository...")
+            val result = tvEventBootstrapRepository.getEventBootstrap(eventId)
             result.fold(
-                onSuccess = { event ->
-                    Log.d("FundraisingMilestoneViewModel", "   [STEP 4] ✅ Event fetched successfully")
+                onSuccess = { bootstrap ->
+                    val event = bootstrap.event
+                    Log.d("FundraisingMilestoneViewModel", "   [STEP 4] ✅ Bootstrap fetched successfully")
                     Log.d("FundraisingMilestoneViewModel", "      - Event name: ${event.eventName}")
                     Log.d("FundraisingMilestoneViewModel", "      - Background type: ${event.backgroundType}")
+                    Log.d(
+                        "FundraisingMilestoneViewModel",
+                        "      - Public channel: ${bootstrap.realtime.channels.public}",
+                    )
                     
                     currentEventId = eventId
                     Log.d("FundraisingMilestoneViewModel", "   [STEP 5] Updating UI state with event...")
@@ -221,19 +229,28 @@ class FundraisingMilestoneViewModel @Inject constructor(
                     Log.d("FundraisingMilestoneViewModel", "   [STEP 6] Checking network before initializing Pusher...")
                     if (networkMonitor.isCurrentlyOnline()) {
                         Log.d("FundraisingMilestoneViewModel", "   [STEP 6] ✅ Network online, initializing Pusher...")
-                        initializePusher(eventId, event)
+                        initializePusher(
+                            eventId = eventId,
+                            event = event,
+                            realtimeHints = bootstrap.realtime,
+                            animationContractUrl = bootstrap.animationContractUrl,
+                        )
                     } else {
                         Log.w("FundraisingMilestoneViewModel", "⚠️ Network lost during load, skipping Pusher initialization")
                     }
                 },
                 onFailure = { exception ->
                     Log.e("FundraisingMilestoneViewModel", "   [STEP 4] ❌ Failed to fetch event", exception)
+                    sessionExpiryHandler.invalidateSessionIfNeeded(exception)
                     // Check if error is due to network
-                    val errorMessage = if (!networkMonitor.isCurrentlyOnline()) {
-                        "No internet connection. Please check your network and try again."
-                    } else {
-                        exception.message ?: "Failed to load event"
-                    }
+                    val errorMessage =
+                        when {
+                            !networkMonitor.isCurrentlyOnline() ->
+                                "No internet connection. Please check your network and try again."
+                            exception is AuthenticatedApiHttpException ->
+                                AuthenticatedApiUserMessages.messageFor(exception)
+                            else -> exception.message ?: "Failed to load event"
+                        }
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         error = errorMessage
@@ -290,6 +307,8 @@ class FundraisingMilestoneViewModel @Inject constructor(
         // Reset flags
         Log.d("FundraisingMilestoneViewModel", "   [STEP 3] Resetting flags...")
         isPusherInitialized = false
+        realtimePipelineReady = false
+        activePublicChannelName = null
         currentEventId = null
         Log.d("FundraisingMilestoneViewModel", "   [STEP 3] ✅ Flags reset")
         
@@ -310,88 +329,100 @@ class FundraisingMilestoneViewModel @Inject constructor(
     /**
      * Initializes Pusher connection and sets up event listeners.
      */
-    private fun initializePusher(eventId: String, event: Event) {
-        // Only initialize if not already initialized for this event
-        if (isPusherInitialized && currentEventId == eventId) {
-            Log.d("FundraisingMilestoneViewModel", "Pusher already initialized for event $eventId, skipping")
+    private fun initializePusher(
+        eventId: String,
+        event: Event,
+        realtimeHints: TvEventRealtimeHints,
+        animationContractUrl: String,
+    ) {
+        if (isPusherInitialized && currentEventId == eventId && realtimePipelineReady) {
+            Log.d("FundraisingMilestoneViewModel", "Realtime pipeline already ready for event $eventId")
             return
         }
-        
-        // Disconnection should already be handled in loadEvent before calling this
-        // But if somehow we get here with a different event, log a warning
+
         if (isPusherInitialized && currentEventId != eventId) {
             Log.w("FundraisingMilestoneViewModel", "⚠️ Warning: Initializing Pusher for different event without disconnecting first")
         }
-        
-        isPusherInitialized = true
-        currentEventId = eventId
-        
-        viewModelScope.launch {
+
+        flowJobs.forEach { job ->
             try {
-                // Initialize Pusher first - force reconnect if switching events
-                val forceReconnect = isPusherInitialized && currentEventId != eventId
-                if (!pusherService.initialize(forceReconnect = forceReconnect)) {
+                job.cancel()
+            } catch (_: Exception) {
+            }
+        }
+        flowJobs.clear()
+
+        currentEventId = eventId
+        isPusherInitialized = false
+        realtimePipelineReady = false
+        tipAnimationGuard.reset()
+        pusherService.setEventCodeForAuth(event.eventCode)
+        pusherService.configureFromBootstrap(realtimeHints)
+
+        val screenDisplayStateEvent = realtimeHints.events?.screenDisplayState?.takeIf { it.isNotBlank() }
+            ?: DEFAULT_SCREEN_DISPLAY_STATE_EVENT
+        activeScreenDisplayEventName = screenDisplayStateEvent
+        pusherService.setScreenDisplayStateEventName(screenDisplayStateEvent)
+
+        // Subscribe first, then bind observers — avoids the race where observe* waits ~2s for
+        // publicChannel / globalLiveTvChannel and permanently closes if subscribe is slow.
+        val pusherSetupJob = viewModelScope.launch {
+            try {
+                val staleMs = animationContractRepository.fetchStaleThresholdMs(animationContractUrl)
+                tipAnimationGuard.updateStaleThresholdMs(staleMs)
+                Log.d("FundraisingMilestoneViewModel", "Animation guard staleThresholdMs=$staleMs")
+
+                if (!pusherService.initialize(forceReconnect = false)) {
                     Log.e("FundraisingMilestoneViewModel", "Failed to initialize Pusher")
                     return@launch
                 }
-                
-                // Wait a bit for connection to establish
+
                 kotlinx.coroutines.delay(500)
-                
-                // Subscribe to public channel (for animations, amount updates, latest tip)
-                val publicChannelName = "event-$eventId"
+
+                val publicChannelName = realtimeHints.channels.public
+                activePublicChannelName = publicChannelName
                 if (!pusherService.subscribeToPublicChannel(publicChannelName)) {
                     Log.e("FundraisingMilestoneViewModel", "Failed to subscribe to public channel: $publicChannelName")
                     return@launch
                 }
-                
-                // Subscribe to private channel (for screen settings)
-                val privateChannelName = "private-event-$eventId"
-                if (!pusherService.subscribeToPrivateChannel(privateChannelName)) {
-                    Log.e("FundraisingMilestoneViewModel", "Failed to subscribe to private channel: $privateChannelName")
+                Log.d(
+                    "FundraisingMilestoneViewModel",
+                    "✅ Public channel subscribed: $publicChannelName (screen-display bound at subscribe)",
+                )
+
+                if (!pusherService.subscribeToGlobalLiveTv()) {
+                    Log.e("FundraisingMilestoneViewModel", "Failed to subscribe to global-live-tv")
                     return@launch
                 }
-                
-                // Wait a bit for channel subscriptions to be ready
-                kotlinx.coroutines.delay(500)
-                
+
+                kotlinx.coroutines.delay(200)
+
                 Log.d("FundraisingMilestoneViewModel", "✅ Pusher initialized and subscribed to:")
                 Log.d("FundraisingMilestoneViewModel", "   - Public channel: $publicChannelName")
-                Log.d("FundraisingMilestoneViewModel", "   - Private channel: $privateChannelName")
-                
-                // Log that we're about to start observing
-                Log.d("FundraisingMilestoneViewModel", "   - About to start observing flows...")
+                Log.d("FundraisingMilestoneViewModel", "   - global-live-tv (tip-animation)")
+                Log.d("FundraisingMilestoneViewModel", "   - Venue screen sync: $screenDisplayStateEvent (public only)")
+                Log.d("FundraisingMilestoneViewModel", "   - Starting observe flows after subscribe...")
+                startRealtimeObservers(screenDisplayStateEvent)
+                isPusherInitialized = true
+                realtimePipelineReady = true
+                Log.d("FundraisingMilestoneViewModel", "✅ Realtime pipeline ready for event $eventId")
             } catch (e: Exception) {
-                // Handle Pusher initialization errors
                 Log.e("FundraisingMilestoneViewModel", "Error initializing Pusher", e)
+                isPusherInitialized = false
+                realtimePipelineReady = false
             }
         }
-        
+        flowJobs.add(pusherSetupJob)
+    }
+
+    /**
+     * Binds Pusher Flows only after public + global channels are subscribed.
+     */
+    private fun startRealtimeObservers(screenDisplayStateEvent: String) {
         // Observe tip-animation events in separate coroutine
         val tipAnimationJob = viewModelScope.launch {
             try {
                 Log.d("FundraisingMilestoneViewModel", "🔍 Starting to observe tip-animation flow...")
-                
-                // Wait for event to be loaded before processing animations
-                // This prevents animations from failing when they arrive before event data is ready
-                var eventReady = false
-                var waitAttempts = 0
-                while (!eventReady && waitAttempts < 50) { // Wait up to 5 seconds for event
-                    val currentEvent = _uiState.value.event
-                    if (currentEvent != null && currentEvent.characterSets != null) {
-                        eventReady = true
-                        Log.d("FundraisingMilestoneViewModel", "✅ Event loaded, ready to process animations")
-                    } else {
-                        kotlinx.coroutines.delay(100)
-                        waitAttempts++
-                    }
-                }
-                
-                if (!eventReady) {
-                    Log.w("FundraisingMilestoneViewModel", "⚠️ Event not loaded after waiting, but will continue to observe")
-                }
-                
-                // Queue for events that arrive before event is ready
                 val pendingEvents = mutableListOf<TipAnimationEvent>()
                 
                 pusherService.observeTipAnimation()
@@ -403,12 +434,19 @@ class FundraisingMilestoneViewModel @Inject constructor(
                         }
                     }
                     .collect { tipAnimationEvent ->
-                        Log.d("FundraisingMilestoneViewModel", "🎬 Received tip-animation event in ViewModel")
+                        val activeId = currentEventId ?: return@collect
+                        if (!tipAnimationGuard.shouldAccept(tipAnimationEvent, activeId)) {
+                            Log.d(
+                                "FundraisingMilestoneViewModel",
+                                "tip-animation rejected by guard (eventId=${tipAnimationEvent.eventId})",
+                            )
+                            return@collect
+                        }
+                        Log.d("FundraisingMilestoneViewModel", "🎬 Accepted tip-animation for event $activeId")
                         Log.d("FundraisingMilestoneViewModel", "   - Tips count: ${tipAnimationEvent.selectedTips.size}")
                         Log.d("FundraisingMilestoneViewModel", "   - Amount: ${tipAnimationEvent.amount}")
                         Log.d("FundraisingMilestoneViewModel", "   - Sender: ${tipAnimationEvent.sender}")
                         
-                        // Use current event from state (may have been updated)
                         val currentEvent = _uiState.value.event
                         if (currentEvent != null && currentEvent.characterSets != null) {
                             Log.d("FundraisingMilestoneViewModel", "   - Event found, processing animations...")
@@ -476,29 +514,27 @@ class FundraisingMilestoneViewModel @Inject constructor(
             }
         }
         flowJobs.add(amountUpdatedJob)
-        
-        // Observe screen settings updates in separate coroutine
-        val settingsUpdatedJob = viewModelScope.launch {
+
+        // Public mirror — venue Screen Display (same payload as web overlay sync)
+        val screenDisplayStateJob = viewModelScope.launch {
             try {
-                pusherService.observeScreenSettingsUpdated()
-                    .catch { e -> 
-                        // Ignore cancellation exceptions - they're expected when switching events
+                pusherService.observeScreenDisplayState(screenDisplayStateEvent)
+                    .catch { e ->
                         if (e !is kotlinx.coroutines.CancellationException) {
-                            Log.e("FundraisingMilestoneViewModel", "Error in settings-updated flow", e)
+                            Log.e("FundraisingMilestoneViewModel", "Error in screen-display-state flow", e)
                         }
                     }
-                    .collect { settingsUpdated ->
-                        Log.d("FundraisingMilestoneViewModel", "Received settings-updated event")
-                        updateScreenSettings(settingsUpdated)
+                    .collect { payload ->
+                        Log.d("FundraisingMilestoneViewModel", "Received $screenDisplayStateEvent")
+                        applyScreenDisplayState(payload)
                     }
             } catch (e: Exception) {
-                // Ignore cancellation exceptions - they're expected when switching events
                 if (e !is kotlinx.coroutines.CancellationException) {
-                    Log.e("FundraisingMilestoneViewModel", "Error collecting settings-updated", e)
+                    Log.e("FundraisingMilestoneViewModel", "Error collecting screen-display-state", e)
                 }
             }
         }
-        flowJobs.add(settingsUpdatedJob)
+        flowJobs.add(screenDisplayStateJob)
         
         // Observe latest tip updates in separate coroutine
         val latestTipUpdatedJob = viewModelScope.launch {
@@ -522,6 +558,38 @@ class FundraisingMilestoneViewModel @Inject constructor(
             }
         }
         flowJobs.add(latestTipUpdatedJob)
+
+        val reconnectJob = viewModelScope.launch {
+            try {
+                pusherService.observeConnectionEstablished().collect {
+                    if (!realtimePipelineReady) return@collect
+                    val channelName = activePublicChannelName ?: return@collect
+                    Log.d(
+                        "FundraisingMilestoneViewModel",
+                        "🔄 Pusher reconnected — resubscribing public channel $channelName",
+                    )
+                    pusherService.setScreenDisplayStateEventName(activeScreenDisplayEventName)
+                    val publicOk = pusherService.subscribeToPublicChannel(channelName)
+                    val globalOk = pusherService.subscribeToGlobalLiveTv()
+                    if (publicOk && globalOk) {
+                        Log.d(
+                            "FundraisingMilestoneViewModel",
+                            "✅ Public + global-live-tv resubscribed after reconnect",
+                        )
+                    } else {
+                        Log.e(
+                            "FundraisingMilestoneViewModel",
+                            "❌ Reconnect resubscribe failed public=$publicOk global=$globalOk",
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    Log.e("FundraisingMilestoneViewModel", "Reconnect resubscribe loop failed", e)
+                }
+            }
+        }
+        flowJobs.add(reconnectJob)
     }
     
     /**
@@ -610,36 +678,33 @@ class FundraisingMilestoneViewModel @Inject constructor(
     }
     
     /**
-     * Updates screen settings from Pusher event.
+     * Applies screen-display-state / screen-settings-updated broadcast to HUD state.
      */
-    private fun updateScreenSettings(settingsUpdated: com.example.telepse.data.model.ScreenSettingsUpdatedEvent) {
-        val currentEvent = _uiState.value.event
-        if (currentEvent != null) {
-            Log.d("FundraisingMilestoneViewModel", "🔄 Updating screen settings from Pusher event")
-            Log.d("FundraisingMilestoneViewModel", "   - eventBackground: ${settingsUpdated.eventBackground}")
-            Log.d("FundraisingMilestoneViewModel", "   - backgroundType: ${settingsUpdated.backgroundType}")
-            Log.d("FundraisingMilestoneViewModel", "   - hideProgressBarAmount: ${settingsUpdated.hideProgressBarAmount}")
-            Log.d("FundraisingMilestoneViewModel", "   - showLatestAmount: ${settingsUpdated.showLatestAmount}")
-            Log.d("FundraisingMilestoneViewModel", "   - moneyFor: ${settingsUpdated.moneyFor}")
-            Log.d("FundraisingMilestoneViewModel", "   - tipUsageDisclosure: ${settingsUpdated.tipUsageDisclosure?.size} items")
-            
-            _uiState.value = _uiState.value.copy(
-                event = currentEvent.copy(
-                    eventBackground = settingsUpdated.eventBackground ?: currentEvent.eventBackground,
-                    backgroundType = settingsUpdated.backgroundType ?: currentEvent.backgroundType,
-                    hideProgressBarAmount = settingsUpdated.hideProgressBarAmount ?: currentEvent.hideProgressBarAmount,
-                    showLatestAmount = settingsUpdated.showLatestAmount ?: currentEvent.showLatestAmount,
-                    moneyFor = settingsUpdated.moneyFor ?: currentEvent.moneyFor,
-                    tipUsageDisclosure = settingsUpdated.tipUsageDisclosure ?: currentEvent.tipUsageDisclosure,
-                    amountRaised = settingsUpdated.amountRaised ?: currentEvent.amountRaised,
-                    numOfTips = settingsUpdated.numOfTips ?: currentEvent.numOfTips,
-                    latestTipAmount = settingsUpdated.latestTipAmount ?: currentEvent.latestTipAmount
-                )
-            )
-            Log.d("FundraisingMilestoneViewModel", "✅ Screen settings updated successfully")
-        } else {
-            Log.w("FundraisingMilestoneViewModel", "⚠️ Cannot update screen settings: event is null")
+    private fun applyScreenDisplayState(payload: ScreenDisplayStatePayload) {
+        val currentEvent = _uiState.value.event ?: run {
+            Log.w("FundraisingMilestoneViewModel", "⚠️ Ignoring screen display payload: event is null")
+            return
         }
+        if (!payloadMatchesActiveEvent(payload)) {
+            Log.d(
+                "FundraisingMilestoneViewModel",
+                "⚠️ Ignoring screen display payload for other event ${payload.eventId}",
+            )
+            return
+        }
+        val merged = ScreenDisplayStateApplier.apply(currentEvent, payload)
+        _uiState.value = _uiState.value.copy(event = merged)
+        Log.d(
+            "FundraisingMilestoneViewModel",
+            "✅ Screen display state applied hideProgress=${merged.hideProgressBarAmount} bgType=${merged.backgroundType}",
+        )
+    }
+
+    private fun payloadMatchesActiveEvent(payload: ScreenDisplayStatePayload): Boolean {
+        val payloadId = payload.eventId?.trim()?.takeIf { it.isNotEmpty() } ?: return true
+        val activeId = currentEventId?.trim().orEmpty()
+        val loadedId = _uiState.value.event?.id?.trim().orEmpty()
+        return payloadId == activeId || (loadedId.isNotEmpty() && payloadId == loadedId)
     }
     
     /**
@@ -699,6 +764,7 @@ class FundraisingMilestoneViewModel @Inject constructor(
         
         // Reset flags BEFORE disconnecting to prevent race conditions
         isPusherInitialized = false
+        realtimePipelineReady = false
         currentEventId = null
         
         // Disconnect from Pusher AFTER canceling jobs (launch coroutine for suspend function)
@@ -759,6 +825,7 @@ class FundraisingMilestoneViewModel @Inject constructor(
         // Reset flags
         Log.d("FundraisingMilestoneViewModel", "   [STEP 3] Resetting flags...")
         isPusherInitialized = false
+        realtimePipelineReady = false
         currentEventId = null
         Log.d("FundraisingMilestoneViewModel", "   [STEP 3] ✅ Flags reset")
         

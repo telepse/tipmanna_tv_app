@@ -4,27 +4,48 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.tv.material3.ExperimentalTvMaterial3Api
+import com.example.telepse.ui.tv.TvFocusBridge
+import com.example.telepse.ui.tv.TvLazyColumn
+import com.example.telepse.ui.tv.TvNavButton
+import com.example.telepse.ui.tv.requestInitialTvFocus
+import com.example.telepse.ui.tv.tvFocusChain
+import com.example.telepse.ui.tv.tvFocusRing
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -32,7 +53,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.telepse.R
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import coil.compose.rememberAsyncImagePainter
 import coil.request.ImageRequest
@@ -41,40 +61,61 @@ import com.example.telepse.ui.network.NetworkStatusIndicator
 import com.example.telepse.ui.network.rememberNetworkMonitor
 import com.example.telepse.ui.theme.*
 import com.example.telepse.ui.viewmodel.CodeInputViewModel
-import java.time.Instant
-import java.time.LocalDateTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
-import java.time.LocalDate
-import java.time.LocalTime
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(
+    ExperimentalTvMaterial3Api::class,
+    androidx.tv.material3.ExperimentalTvMaterial3Api::class,
+    ExperimentalComposeUiApi::class,
+)
 @Composable
 fun CodeInputScreen(
     onCodeValidated: (String) -> Unit,
     onLoadOverlay: (String) -> Unit,
+    onOpenYouTubeSpike: () -> Unit = {},
+    onBackToHub: () -> Unit = {},
     viewModel: CodeInputViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var textValue by remember { mutableStateOf(uiState.code) }
     val context = LocalContext.current
     val networkMonitor = rememberNetworkMonitor()
+    val hubFocus = remember { FocusRequester() }
+    val youtubeFocus = remember { FocusRequester() }
+    val codeFocus = remember { FocusRequester() }
+    val iconSearchFocus = remember { FocusRequester() }
+    val primaryActionFocus = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
     
     val currentEvent = viewModel.getCurrentEvent()
     val hasEvents = uiState.events.isNotEmpty()
     val canNavigateNext = uiState.events.size > 1
     val canNavigatePrevious = uiState.events.size > 1
     
+    LaunchedEffect(Unit) {
+        // Initial entry only — do not re-focus the search field after results.
+        if (!hasEvents) {
+            codeFocus.requestInitialTvFocus()
+        }
+    }
+
+    DisposableEffect(Unit) {
+        TvFocusBridge.onDpadDown = null
+        TvFocusBridge.onDpadUp = null
+        onDispose { }
+    }
+
     LaunchedEffect(uiState.code) {
         if (textValue != uiState.code) {
             textValue = uiState.code
         }
     }
-    
-    // Show event details when events are loaded
-    LaunchedEffect(uiState.events) {
-        // Events loaded, UI will update automatically
+
+    // After search results land: hide IME and move focus to Load Overlay (not the text field).
+    LaunchedEffect(hasEvents, uiState.isLoading) {
+        if (hasEvents && !uiState.isLoading) {
+            keyboardController?.hide()
+            primaryActionFocus.requestInitialTvFocus(delayMs = 80L)
+        }
     }
     
     // Background image path
@@ -117,17 +158,48 @@ fun CodeInputScreen(
                 .align(Alignment.TopCenter)
                 .zIndex(2000f) // Above everything
         )
+
+        Box(
+            modifier =
+                Modifier.align(Alignment.TopStart)
+                    .padding(16.dp)
+                    .zIndex(2001f),
+        ) {
+            TvNavButton(
+                text = "Hub",
+                onClick = onBackToHub,
+                focusRequester = hubFocus,
+                focusChainDown = codeFocus,
+                focusChainRight = youtubeFocus,
+            )
+        }
+
+        Box(
+            modifier =
+                Modifier.align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .zIndex(2001f),
+        ) {
+            TvNavButton(
+                text = "YouTube spike",
+                onClick = onOpenYouTubeSpike,
+                focusRequester = youtubeFocus,
+                focusChainDown = codeFocus,
+                focusChainLeft = hubFocus,
+            )
+        }
         
-        // Content - Reduced width and scrollable
-        val scrollState = rememberScrollState()
-        Column(
+        TvLazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(scrollState)
                 .padding(horizontal = 48.dp, vertical = 64.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Top
+            scrollable = true,
         ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Top,
+            ) {
             // Content Container with reduced width
             Column(
                 modifier = Modifier
@@ -185,6 +257,13 @@ fun CodeInputScreen(
                         modifier = Modifier
                             .weight(1f)
                             .height(56.dp)
+                            .focusRequester(codeFocus)
+                            .tvFocusChain(
+                                up = hubFocus,
+                                down = iconSearchFocus,
+                                right = iconSearchFocus,
+                            )
+                            .tvFocusRing(cornerRadiusDp = 12)
                             .background(
                                 color = BackgroundWhite,
                                 shape = RoundedCornerShape(12.dp)
@@ -208,13 +287,29 @@ fun CodeInputScreen(
                     
                     // Search Icon Button
                     IconButton(
-                        onClick = {
-                            if (textValue.isNotBlank()) {
-                                viewModel.searchEvents()
-                            }
-                        },
+                        onClick = { viewModel.searchEvents() },
                         modifier = Modifier
                             .size(56.dp)
+                            .focusRequester(iconSearchFocus)
+                            .tvFocusChain(
+                                up = codeFocus,
+                                down = primaryActionFocus,
+                                left = codeFocus,
+                            )
+                            .onKeyEvent { event ->
+                                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                                when (event.key) {
+                                    Key.DirectionCenter,
+                                    Key.Enter,
+                                    Key.NumPadEnter,
+                                    -> {
+                                        viewModel.searchEvents()
+                                        true
+                                    }
+                                    else -> false
+                                }
+                            }
+                            .tvFocusRing(cornerRadiusDp = 8)
                             .background(
                                 color = BackgroundWhite,
                                 shape = RoundedCornerShape(8.dp)
@@ -251,19 +346,20 @@ fun CodeInputScreen(
                 Button(
                     onClick = {
                         if (hasEvents && currentEvent != null) {
-                            // Load Overlay action - navigate to fundraising milestone screen
                             onLoadOverlay(currentEvent.id)
                         } else {
-                            // Search action
-                            if (textValue.isNotBlank()) {
-                                viewModel.searchEvents()
-                            }
+                            viewModel.searchEvents()
                         }
                     },
-                    enabled = !uiState.isLoading && textValue.isNotBlank(),
+                    enabled =
+                        !uiState.isLoading &&
+                            (hasEvents && currentEvent != null || !hasEvents),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp)
+                        .focusRequester(primaryActionFocus)
+                        .tvFocusChain(up = iconSearchFocus)
+                        .tvFocusRing(cornerRadiusDp = 8, enabled = !uiState.isLoading)
                         .background(
                             color = if (hasEvents) LoadOverlayButtonBg else SearchButtonOrange,
                             shape = RoundedCornerShape(8.dp)
@@ -323,6 +419,7 @@ fun CodeInputScreen(
                     )
                 }
             }
+            }
         }
     }
 }
@@ -337,15 +434,7 @@ fun EventDetailsCard(
     onNext: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    // Format date and time
-    val formattedDate = try {
-        val instant = Instant.parse(event.eventDate)
-        val dateTime = LocalDateTime.ofInstant(instant, ZoneId.systemDefault())
-        val dateFormatter = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
-        dateFormatter.format(dateTime)
-    } catch (e: Exception) {
-        event.eventDate
-    }
+    val formattedDate = formatEventDisplayDate(event.eventDate)
     
     val formattedTime = event.startTime
     
@@ -366,6 +455,7 @@ fun EventDetailsCard(
                     onClick = onPrevious,
                     modifier = Modifier
                         .size(40.dp)
+                        .tvFocusRing(cornerRadiusDp = 8)
                         .background(
                             color = BackgroundWhite,
                             shape = RoundedCornerShape(8.dp)
@@ -499,6 +589,7 @@ fun EventDetailsCard(
                     onClick = onNext,
                     modifier = Modifier
                         .size(40.dp)
+                        .tvFocusRing(cornerRadiusDp = 8)
                         .background(
                             color = BackgroundWhite,
                             shape = RoundedCornerShape(8.dp)
@@ -524,6 +615,7 @@ fun EventDetailsCard(
                     },
                     modifier = Modifier
                         .size(40.dp)
+                        .tvFocusRing(cornerRadiusDp = 8)
                         .background(
                             color = BackgroundWhite,
                             shape = RoundedCornerShape(8.dp)
@@ -551,45 +643,10 @@ fun EventDetailsCard(
  */
 @Composable
 fun getEventStatus(event: Event): Triple<String, Color, Color> {
-    val now = LocalDateTime.now()
-    
-    return try {
-        // Parse event date
-        val eventInstant = Instant.parse(event.eventDate)
-        val eventDateTime = LocalDateTime.ofInstant(eventInstant, ZoneId.systemDefault())
-        val eventDate = eventDateTime.toLocalDate()
-        val currentDate = now.toLocalDate()
-        
-        // Parse end time if available
-        val endTime = event.endTime?.let {
-            try {
-                LocalTime.parse(it)
-            } catch (e: Exception) {
-                null
-            }
-        }
-        
-        when {
-            // Event date is in the past
-            eventDate.isBefore(currentDate) -> {
-                Triple("Completed", Color.Black, Color.White)
-            }
-            // Event date is today
-            eventDate.isEqual(currentDate) -> {
-                // Check if end time has passed
-                if (endTime != null && now.toLocalTime().isAfter(endTime)) {
-                    Triple("Completed", Color.Black, Color.White)
-                } else {
-                    Triple("Ongoing", OngoingBlue, Color.White)
-                }
-            }
-            // Event date is in the future
-            else -> {
-                Triple("Not started", Color(0xFFF5F6F7), Color.Black)
-            }
-        }
-    } catch (e: Exception) {
-        // Fallback to default status if parsing fails
-        Triple("Pending", OngoingBlue, Color.White)
+    return when (eventStatusFromDateFields(event.eventDate, event.endTime)) {
+        EventStatusBadge.Completed -> Triple("Completed", Color.Black, Color.White)
+        EventStatusBadge.Ongoing -> Triple("Ongoing", OngoingBlue, Color.White)
+        EventStatusBadge.NotStarted -> Triple("Not started", Color(0xFFF5F6F7), Color.Black)
+        EventStatusBadge.Pending -> Triple("Pending", OngoingBlue, Color.White)
     }
 }

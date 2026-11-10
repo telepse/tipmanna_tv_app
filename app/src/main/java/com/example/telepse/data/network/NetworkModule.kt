@@ -5,6 +5,7 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
+import com.example.telepse.di.RecoveryAuthorizedClient
 import dagger.hilt.components.SingletonComponent
 import io.ktor.client.HttpClient
 import javax.inject.Singleton
@@ -17,6 +18,13 @@ object NetworkModule {
     @Singleton
     fun provideHttpClient(ktorClient: KtorClient): HttpClient {
         return ktorClient.httpClient
+    }
+
+    @Provides
+    @Singleton
+    @RecoveryAuthorizedClient
+    fun provideRecoveryHttpClient(ktorClient: KtorClient): HttpClient {
+        return ktorClient.recoveryHttpClient
     }
     
     @Provides
