@@ -13,7 +13,7 @@ import com.example.telepse.data.model.WalletStatusResponse
 import com.example.telepse.data.model.WalletTransactionsResponse
 
 /** Wallet API surface used by tips UI (enables JVM fakes without Robolectric). */
-interface WalletOperations {
+interface WalletOperations : PaymentAnimationRecoveryOperations {
     suspend fun fetchWallet(): Result<WalletStatusResponse>
 
     suspend fun fetchTransactions(): Result<WalletTransactionsResponse>

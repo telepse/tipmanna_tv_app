@@ -1,5 +1,9 @@
 package com.example.telepse.data.repository
 
+import com.example.telepse.data.model.AnimationRecoveryClaimResponse
+import com.example.telepse.data.model.AnimationRecoveryExchangeRequest
+import com.example.telepse.data.model.AnimationRecoveryExchangeResponse
+import com.example.telepse.data.model.AnimationRecoveryProgressRequest
 import com.example.telepse.data.model.ActiveTipConfigResponse
 import com.example.telepse.data.model.CreateTipQuoteRequest
 import com.example.telepse.data.model.CreateTipQuoteResponse
@@ -15,7 +19,9 @@ import android.util.Log
 import com.example.telepse.data.auth.SessionStore
 import com.example.telepse.data.network.ApiConfig
 import com.example.telepse.data.network.ApiErrorMessageMapper
+import com.example.telepse.data.network.applyRecoverySessionBearer
 import com.example.telepse.data.network.WalletHttpException
+import com.example.telepse.di.RecoveryAuthorizedClient
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
@@ -36,6 +42,7 @@ import javax.inject.Singleton
 @Singleton
 class WalletRepository @Inject constructor(
     private val httpClient: HttpClient,
+    @RecoveryAuthorizedClient private val recoveryHttpClient: HttpClient,
     private val sessionStore: SessionStore,
 ) : WalletOperations {
     /** Debit body must emit defaulted paymentSurface/deviceCategory (global Json uses encodeDefaults=false). */
@@ -43,6 +50,8 @@ class WalletRepository @Inject constructor(
         Json {
             ignoreUnknownKeys = true
             encodeDefaults = true
+            // Omit null optionals — staging walletDebitSchema uses .optional() (not nullish) on several fields.
+            explicitNulls = false
         }
     private val checkoutJson =
         Json {
@@ -178,6 +187,57 @@ class WalletRepository @Inject constructor(
             ensureSuccess(response, "cancelTvTipCheckoutSession")
         }
 
+    override suspend fun exchangeAnimationRecovery(
+        recoveryState: String,
+        transactionId: String,
+        stripePaymentIntentId: String,
+        eventId: String,
+    ): Result<AnimationRecoveryExchangeResponse> =
+        runCatching {
+            val response =
+                httpClient.post("${ApiConfig.BASE_URL}/api/v1/payments/animation-recovery/exchange") {
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        AnimationRecoveryExchangeRequest(
+                            recoveryState = recoveryState,
+                            transactionId = transactionId,
+                            stripePaymentIntentId = stripePaymentIntentId,
+                            eventId = eventId,
+                        ),
+                    )
+                }
+            ensureSuccess(response, "exchangeAnimationRecovery")
+            response.body()
+        }
+
+    override suspend fun claimAnimationRecovery(
+        recoverySessionToken: String,
+    ): Result<AnimationRecoveryClaimResponse> =
+        runCatching {
+            val response =
+                recoveryHttpClient.post("${ApiConfig.BASE_URL}/api/v1/payments/animation-recovery/claim") {
+                    applyRecoverySessionBearer(recoverySessionToken)
+                    contentType(ContentType.Application.Json)
+                    setBody("{}")
+                }
+            ensureSuccess(response, "claimAnimationRecovery")
+            response.body()
+        }
+
+    override suspend fun progressAnimationRecovery(
+        recoverySessionToken: String,
+        body: AnimationRecoveryProgressRequest,
+    ): Result<Unit> =
+        runCatching {
+            val response =
+                recoveryHttpClient.post("${ApiConfig.BASE_URL}/api/v1/payments/animation-recovery/progress") {
+                    applyRecoverySessionBearer(recoverySessionToken)
+                    contentType(ContentType.Application.Json)
+                    setBody(body)
+                }
+            ensureSuccess(response, "progressAnimationRecovery")
+        }
+
     private suspend fun ensureSuccess(response: HttpResponse, operation: String) {
         if (!response.status.isSuccess()) {
             throw walletHttpFailure(response, operation)
@@ -186,16 +246,24 @@ class WalletRepository @Inject constructor(
 
     private suspend fun walletHttpFailure(response: HttpResponse, operation: String): WalletHttpException {
         val status = response.status.value
-        val authPresent = sessionStore.accessToken() != null
+        val tipperAuthPresent = sessionStore.accessToken() != null
         val rawBody = response.bodyAsText()
         val apiMessage = ApiErrorMessageMapper.parseHttpFailure(status, rawBody).apiMessage
+        val detailHint =
+            apiMessage
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() && it.length <= 120 }
+                ?.replace(Regex("\\d{4}"), "****")
         Log.w(
             TAG,
-            "wallet op=$operation http=$status authPresent=$authPresent",
+            buildString {
+                append("wallet op=$operation http=$status tipperAuthPresent=$tipperAuthPresent")
+                if (detailHint != null) append(" apiMessage=").append(detailHint)
+            },
         )
         return WalletHttpException(
             httpStatus = status,
-            authPresent = authPresent,
+            authPresent = tipperAuthPresent,
             apiMessage = apiMessage,
         )
     }

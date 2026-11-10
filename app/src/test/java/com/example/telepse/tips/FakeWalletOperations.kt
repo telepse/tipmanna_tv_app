@@ -1,5 +1,8 @@
 package com.example.telepse.tips
 
+import com.example.telepse.data.model.AnimationRecoveryClaimResponse
+import com.example.telepse.data.model.AnimationRecoveryExchangeResponse
+import com.example.telepse.data.model.AnimationRecoveryProgressRequest
 import com.example.telepse.data.model.ActiveTipConfigResponse
 import com.example.telepse.data.model.CharacterSetCatalogRow
 import com.example.telepse.data.model.CreateTipQuoteRequest
@@ -97,6 +100,24 @@ class FakeWalletOperations : WalletOperations {
     }
 
     override suspend fun cancelTvTipCheckoutSession(sessionId: String): Result<Unit> = Result.success(Unit)
+
+    override suspend fun exchangeAnimationRecovery(
+        recoveryState: String,
+        transactionId: String,
+        stripePaymentIntentId: String,
+        eventId: String,
+    ): Result<AnimationRecoveryExchangeResponse> =
+        Result.success(AnimationRecoveryExchangeResponse(ok = true, sessionToken = "sess-token"))
+
+    override suspend fun claimAnimationRecovery(
+        recoverySessionToken: String,
+    ): Result<AnimationRecoveryClaimResponse> =
+        Result.failure(UnsupportedOperationException("not configured"))
+
+    override suspend fun progressAnimationRecovery(
+        recoverySessionToken: String,
+        body: AnimationRecoveryProgressRequest,
+    ): Result<Unit> = Result.success(Unit)
 
     companion object {
         fun sampleCatalog(eventId: String): EventCharacterCatalogResponse =

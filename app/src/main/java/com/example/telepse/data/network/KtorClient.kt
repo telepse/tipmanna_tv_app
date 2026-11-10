@@ -18,7 +18,12 @@ import javax.inject.Singleton
 class KtorClient @Inject constructor(
     private val sessionStore: SessionStore,
 ) {
-    val httpClient =
+    val httpClient: HttpClient = createClient(includeTipperDefaultAuth = true)
+
+    /** No tipper Bearer on [io.ktor.client.plugins.defaultRequest] — recovery JWT only per call. */
+    val recoveryHttpClient: HttpClient = createClient(includeTipperDefaultAuth = false)
+
+    private fun createClient(includeTipperDefaultAuth: Boolean): HttpClient =
         HttpClient(Android) {
             install(ContentNegotiation) {
                 json(
@@ -32,9 +37,11 @@ class KtorClient @Inject constructor(
             KtorClientLogging.configureHttpLogging(this, BuildConfig.DEBUG)
             KtorClientTimeouts.configureHttpTimeouts(this)
             install(WebSockets)
-            defaultRequest {
-                sessionStore.accessToken()?.let { token ->
-                    header(HttpHeaders.Authorization, "Bearer $token")
+            if (includeTipperDefaultAuth) {
+                defaultRequest {
+                    sessionStore.accessToken()?.let { token ->
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                    }
                 }
             }
         }

@@ -51,6 +51,8 @@ data class WalletDebitRequest(
 data class WalletDebitResponse(
     val transactionId: String? = null,
     val newBalance: String? = null,
+    /** Present when staging returns payer-origin recovery hints (parity with TV checkout paid). */
+    val animationRecovery: TvCheckoutAnimationRecoveryHints? = null,
 )
 
 @Serializable

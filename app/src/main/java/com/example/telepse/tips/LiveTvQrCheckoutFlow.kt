@@ -1,6 +1,7 @@
 package com.example.telepse.tips
 
 import com.example.telepse.data.model.CreateTvTipCheckoutSessionRequest
+import com.example.telepse.data.model.TvTipCheckoutSessionStatusResponse
 import com.example.telepse.data.repository.WalletOperations
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -37,7 +38,7 @@ class LiveTvQrCheckoutFlow(
     fun start(
         cart: TipCartState,
         onState: (LiveTvQrPayState) -> Unit,
-        onPaid: () -> Unit,
+        onPaid: (TvTipCheckoutSessionStatusResponse) -> Unit,
     ) {
         if (cart.isEmpty || cart.eventId.isBlank()) return
         pollJob?.cancel()
@@ -132,7 +133,7 @@ class LiveTvQrCheckoutFlow(
     private suspend fun pollUntilTerminal(
         sessionId: String,
         onState: (LiveTvQrPayState) -> Unit,
-        onPaid: () -> Unit,
+        onPaid: (TvTipCheckoutSessionStatusResponse) -> Unit,
     ) {
         while (scope.coroutineContext.isActive) {
             delay(3_000)
@@ -149,7 +150,7 @@ class LiveTvQrCheckoutFlow(
                                     transactionId = status.transactionId,
                                 )
                             onState(state)
-                            onPaid()
+                            onPaid(status)
                             pollJob?.cancel()
                             return
                         }

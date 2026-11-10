@@ -459,6 +459,24 @@ class TipsWalletViewModelSubmitTest {
 
         override suspend fun cancelTvTipCheckoutSession(sessionId: String): Result<Unit> =
             Result.failure(UnsupportedOperationException("not used"))
+
+        override suspend fun exchangeAnimationRecovery(
+            recoveryState: String,
+            transactionId: String,
+            stripePaymentIntentId: String,
+            eventId: String,
+        ): Result<com.example.telepse.data.model.AnimationRecoveryExchangeResponse> =
+            Result.failure(UnsupportedOperationException("not used"))
+
+        override suspend fun claimAnimationRecovery(
+            recoverySessionToken: String,
+        ): Result<com.example.telepse.data.model.AnimationRecoveryClaimResponse> =
+            Result.failure(UnsupportedOperationException("not used"))
+
+        override suspend fun progressAnimationRecovery(
+            recoverySessionToken: String,
+            body: com.example.telepse.data.model.AnimationRecoveryProgressRequest,
+        ): Result<Unit> = Result.failure(UnsupportedOperationException("not used"))
     }
 
     private class SuspendingWalletOperations : RecordingWalletOperations() {

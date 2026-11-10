@@ -20,6 +20,7 @@ import com.example.telepse.livetv.TvScheduleRefreshSignals
 import com.example.telepse.livetv.TvScheduleSource
 import com.example.telepse.player.WebViewYouTubePlayerAdapter
 import com.example.telepse.player.YouTubePlayerState
+import com.example.telepse.tips.LiveTvPaidAnimationRecovery
 import com.example.telepse.tips.LiveTvTipAnimationHost
 import com.example.telepse.tips.LiveTvTipCoordinator
 import com.example.telepse.tips.LiveTvTipUiState
@@ -54,7 +55,7 @@ class LiveTvFoundationViewModel @Inject constructor(
     refreshSignals: TvScheduleRefreshSignals,
     sessionExpiryHandler: SessionExpiryHandler,
     private val analytics: TvAnalyticsClient,
-    walletOperations: WalletOperations,
+    private val walletOperations: WalletOperations,
     debitSubmitSession: WalletDebitSubmitSession,
     private val sessionStore: SessionStore,
     pusherService: PusherService,
@@ -73,6 +74,15 @@ class LiveTvFoundationViewModel @Inject constructor(
             onAuthenticatedSessionFailure = { sessionExpiryHandler.invalidateSessionIfNeeded(it) },
         )
 
+    private val paidAnimationRecovery = LiveTvPaidAnimationRecovery(walletOperations)
+
+    private val tipAnimationHost =
+        LiveTvTipAnimationHost(
+            pusherService = pusherService,
+            animationContractRepository = animationContractRepository,
+            scope = viewModelScope,
+        )
+
     private val tipCoordinator =
         LiveTvTipCoordinator(
             walletOperations = walletOperations,
@@ -80,13 +90,25 @@ class LiveTvFoundationViewModel @Inject constructor(
             isLoggedIn = { sessionStore.isLoggedIn() },
             scope = viewModelScope,
             onSessionAuthFailure = { sessionExpiryHandler.invalidateSessionIfNeeded(it) },
-        )
-
-    private val tipAnimationHost =
-        LiveTvTipAnimationHost(
-            pusherService = pusherService,
-            animationContractRepository = animationContractRepository,
-            scope = viewModelScope,
+            onQrCheckoutPaid = { status ->
+                viewModelScope.launch {
+                    paidAnimationRecovery.recoverAfterQrPaid(
+                        status = status,
+                        animationHost = tipAnimationHost,
+                        activeEventId = status.eventId.trim(),
+                    )
+                }
+            },
+            onWalletCheckoutPaid = { response, eventId ->
+                viewModelScope.launch {
+                    paidAnimationRecovery.recoverAfterWalletPaid(
+                        debitResponse = response,
+                        eventId = eventId,
+                        animationHost = tipAnimationHost,
+                        activeEventId = eventId,
+                    )
+                }
+            },
         )
 
     init {
@@ -239,6 +261,11 @@ class LiveTvFoundationViewModel @Inject constructor(
 
     fun removeTipAnimation(animation: AnimationTrigger) {
         tipAnimationHost.removeAnimation(animation)
+        if (animation.id.startsWith("pay:")) {
+            viewModelScope.launch {
+                paidAnimationRecovery.reportPlaybackCompleted()
+            }
+        }
     }
 
     fun incrementTipQuantity(characterId: String) {

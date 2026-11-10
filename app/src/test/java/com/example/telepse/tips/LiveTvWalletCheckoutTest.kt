@@ -40,6 +40,43 @@ class LiveTvWalletCheckoutTest {
     }
 
     @Test
+    fun successfulWalletPayment_invokesPaidCallbackWithDebitResponse() =
+        runTest {
+            val txId = "33333333-3333-3333-3333-333333333333"
+            val wallet = FakeWalletOperations()
+            wallet.debitResult =
+                Result.success(
+                    com.example.telepse.data.model.WalletDebitResponse(
+                        transactionId = txId,
+                        newBalance = "42",
+                    ),
+                )
+            var callbackTx: String? = null
+            val withCallback =
+                LiveTvTipCoordinator(
+                    walletOperations = wallet,
+                    debitSubmitSession = WalletDebitSubmitSession.createForTests(MemoryWalletDebitPendingPersistence()),
+                    isLoggedIn = { true },
+                    scope = this,
+                    onWalletCheckoutPaid = { response, evt ->
+                        callbackTx = response.transactionId
+                        assertEquals(eventId, evt)
+                    },
+                )
+            wallet.catalogResult = Result.success(FakeWalletOperations.sampleCatalog(eventId))
+            withCallback.onProgrammeEventId(eventId)
+            runCurrent()
+            withCallback.selectCharacter("p1")
+            runCurrent()
+            withCallback.startWalletCheckout()
+            runCurrent()
+            "1234".forEach { withCallback.onWalletPinDigit(it) }
+            withCallback.submitWalletCheckout()
+            runCurrent()
+            assertEquals(txId, callbackTx)
+        }
+
+    @Test
     fun successfulWalletPayment_clearsCart_andUsesIdempotencyKey() =
         runTest {
             val wallet = FakeWalletOperations()

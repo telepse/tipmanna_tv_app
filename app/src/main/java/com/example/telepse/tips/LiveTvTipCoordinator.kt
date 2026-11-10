@@ -47,6 +47,12 @@ class LiveTvTipCoordinator(
     private val isLoggedIn: () -> Boolean,
     private val scope: CoroutineScope,
     private val onSessionAuthFailure: (Throwable) -> Unit = {},
+    private val onQrCheckoutPaid: (com.example.telepse.data.model.TvTipCheckoutSessionStatusResponse) -> Unit = {},
+    private val onWalletCheckoutPaid:
+        (
+            com.example.telepse.data.model.WalletDebitResponse,
+            eventId: String,
+        ) -> Unit = { _, _ -> },
 ) {
     private val _state = MutableStateFlow(LiveTvTipUiState())
     val state: StateFlow<LiveTvTipUiState> = _state.asStateFlow()
@@ -207,7 +213,7 @@ class LiveTvTipCoordinator(
         qrCheckoutFlow.start(
             cart = cart,
             onState = { qr -> _state.update { it.copy(qrPay = qr) } },
-            onPaid = {
+            onPaid = { status ->
                 _state.update { s ->
                     val cleared = s.cart.clear()
                     s.copy(
@@ -217,9 +223,11 @@ class LiveTvTipCoordinator(
                             s.qrPay.copy(
                                 phase = LiveTvQrPayPhase.Paid,
                                 message = "Payment confirmed.",
+                                transactionId = status.transactionId,
                             ),
                     )
                 }
+                onQrCheckoutPaid(status)
             },
         )
     }
@@ -507,6 +515,7 @@ class LiveTvTipCoordinator(
                         .onSuccess { response ->
                             debitSubmitSession.clearAfterAuthoritativeSuccess()
                             clearPayAttemptLocals()
+                            onWalletCheckoutPaid(response, cart.eventId.trim())
                             _state.update { current ->
                                 val cleared = current.cart.clear()
                                 current.copy(

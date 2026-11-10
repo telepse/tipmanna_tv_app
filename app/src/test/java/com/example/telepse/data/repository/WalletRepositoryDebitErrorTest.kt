@@ -35,21 +35,24 @@ class WalletRepositoryDebitErrorTest {
         sessionStore.clear()
     }
 
-    private fun repository(engine: MockEngine): WalletRepository =
-        WalletRepository(
-            httpClient =
-                HttpClient(engine) {
-                    install(ContentNegotiation) {
-                        json(
-                            Json {
-                                ignoreUnknownKeys = true
-                                isLenient = true
-                            },
-                        )
-                    }
-                },
+    private fun repository(engine: MockEngine): WalletRepository {
+        val client =
+            HttpClient(engine) {
+                install(ContentNegotiation) {
+                    json(
+                        Json {
+                            ignoreUnknownKeys = true
+                            isLenient = true
+                        },
+                    )
+                }
+            }
+        return WalletRepository(
+            httpClient = client,
+            recoveryHttpClient = client,
             sessionStore = sessionStore,
         )
+    }
 
     private fun sampleRequest() =
         WalletDebitRequest(

@@ -58,12 +58,22 @@ class LiveTvTipAnimationHost(
                             return@collect
                         }
                         if (!guard.shouldAccept(payload, activeId)) {
+                            WalletPaidAnimationTrace.log(
+                                stage = "tv_paid_animation_event_rejected",
+                                transactionId = payload.transactionId,
+                                detail = "pusher guard payloadEvent=${payload.eventId?.take(8)} active=${activeId.take(8)}",
+                            )
                             Log.d(
                                 tag,
                                 "tip-animation rejected by guard payloadEventId=${payload.eventId} active=$activeId",
                             )
                             return@collect
                         }
+                        WalletPaidAnimationTrace.log(
+                            stage = "tv_paid_animation_event_received",
+                            transactionId = payload.transactionId,
+                            detail = "channel=pusher tips=${payload.selectedTips.size}",
+                        )
                         Log.d(
                             tag,
                             "tip-animation accepted eventId=$activeId tips=${payload.selectedTips.size} tx=${payload.transactionId?.take(8)}",
@@ -105,6 +115,42 @@ class LiveTvTipAnimationHost(
     fun removeAnimation(animation: AnimationTrigger) {
         _pendingAnimations.update { list -> list.filter { it.id != animation.id } }
         Log.d(tag, "Animation removed id=${animation.id}")
+    }
+
+    /**
+     * Same guard + queue path as Pusher `tip-animation`, for authoritative recovery claim payloads.
+     */
+    fun acceptAuthoritativePaymentAnimation(
+        payload: com.example.telepse.data.model.TipAnimationEvent,
+        activeEventIdOverride: String? = null,
+    ) {
+        val activeId = (activeEventIdOverride?.trim()?.takeIf { it.isNotEmpty() } ?: activeEventId.trim())
+        if (activeId.isEmpty()) {
+            Log.d(tag, "Ignored recovery animation — no active programme eventId")
+            return
+        }
+        if (!guard.shouldAccept(payload, activeId)) {
+            WalletPaidAnimationTrace.log(
+                stage = "tv_paid_animation_event_rejected",
+                transactionId = payload.transactionId,
+                detail = "recovery guard payloadEvent=${payload.eventId?.take(8)} active=${activeId.take(8)}",
+            )
+            Log.d(
+                tag,
+                "recovery animation rejected by guard payloadEventId=${payload.eventId} active=$activeId",
+            )
+            return
+        }
+        WalletPaidAnimationTrace.log(
+            stage = "tv_paid_animation_triggered",
+            transactionId = payload.transactionId,
+            detail = "recovery tips=${payload.selectedTips.size}",
+        )
+        Log.d(
+            tag,
+            "recovery animation accepted eventId=$activeId tips=${payload.selectedTips.size} tx=${payload.transactionId?.take(8)}",
+        )
+        enqueue(LiveTvTipAnimationMapper.fromPaymentEvent(payload, catalogByLowerName))
     }
 
     private fun enqueue(triggers: List<AnimationTrigger>) {
