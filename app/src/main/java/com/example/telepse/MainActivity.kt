@@ -23,6 +23,7 @@ import com.example.telepse.data.display.ScreenDisplaySessionStore
 import com.example.telepse.data.repository.AuthRepository
 import com.example.telepse.ui.navigation.NavigationBackResolver
 import com.example.telepse.ui.navigation.Screen
+import com.example.telepse.ui.navigation.TvMvpNavigation
 import com.example.telepse.ui.navigation.initialAppScreen
 import com.example.telepse.ui.navigation.screenDisplayRestoreTarget
 import com.example.telepse.ui.navigation.shouldScheduleScreenDisplayRestoreOnStart
@@ -108,6 +109,7 @@ fun TelepseApp(
                     isFirstOnStartSinceProcessLaunched = false
                 }
                 if (
+                    !TvMvpNavigation.deferScreenDisplayAutoRestore &&
                     shouldScheduleScreenDisplayRestoreOnStart(
                         isFirstOnStartSinceProcessLaunched = firstStart,
                         savedEventId = savedId,
@@ -159,22 +161,11 @@ fun TelepseApp(
     when (val screen = currentScreen) {
         is Screen.JourneyHub -> {
             JourneyHubScreen(
-                onScreenDisplay = {
-                    Log.d(NAV_LOG_TAG, "journey dest=CodeInput")
-                    currentScreen = Screen.CodeInput
-                },
                 onLiveTv = {
                     Log.d(NAV_LOG_TAG, "journey dest=LiveTvFoundation (auth gated)")
                     requireAuth(Screen.LiveTvFoundation) {
                         Log.d(NAV_LOG_TAG, "journey dest=LiveTvFoundation (authed)")
                         currentScreen = Screen.LiveTvFoundation
-                    }
-                },
-                onExplore = {
-                    Log.d(NAV_LOG_TAG, "journey dest=ExplorePlaceholder (auth gated)")
-                    requireAuth(Screen.ExplorePlaceholder) {
-                        Log.d(NAV_LOG_TAG, "journey dest=ExplorePlaceholder (authed)")
-                        currentScreen = Screen.ExplorePlaceholder
                     }
                 },
                 onTipsWallet = {
@@ -186,14 +177,6 @@ fun TelepseApp(
                 onSignIn = {
                     Log.d(NAV_LOG_TAG, "journey dest=TipperLogin returnTo=JourneyHub")
                     currentScreen = Screen.TipperLogin(returnTo = Screen.JourneyHub)
-                },
-                onYouTubeSpike = {
-                    Log.d(NAV_LOG_TAG, "journey dest=YouTubePlaybackSpike")
-                    currentScreen = Screen.YouTubePlaybackSpike
-                },
-                onCommunityRoom = {
-                    Log.d(NAV_LOG_TAG, "journey dest=CommunityRoomIdInput")
-                    currentScreen = Screen.CommunityRoomIdInput
                 },
             )
         }
