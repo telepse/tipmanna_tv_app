@@ -34,6 +34,7 @@ import com.example.telepse.ui.tv.TvHubNavRow
 import com.example.telepse.ui.tv.TvLazyColumn
 import com.example.telepse.ui.tv.TvVerticalFocusIndex
 import com.example.telepse.ui.tv.requestInitialTvFocus
+import com.example.telepse.ui.navigation.TvMvpNavigation
 import com.example.telepse.ui.viewmodel.JourneyHubViewModel
 
 private const val JOURNEY_HUB_LOG_TAG = "JourneyHub"
@@ -41,44 +42,26 @@ private const val JOURNEY_HUB_LOG_TAG = "JourneyHub"
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun JourneyHubScreen(
-    onScreenDisplay: () -> Unit,
     onLiveTv: () -> Unit,
-    onExplore: () -> Unit,
     onTipsWallet: () -> Unit,
     onSignIn: () -> Unit,
-    onYouTubeSpike: () -> Unit,
-    onCommunityRoom: () -> Unit,
     viewModel: JourneyHubViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val listFocus = remember { FocusRequester() }
     var selectedActionIndex by remember { mutableIntStateOf(0) }
 
-    val labels =
-        remember(uiState.loggedIn) {
-            buildList {
-                add("Event screen display")
-                add("Community room display")
-                add("Watch LIVE TV")
-                add("Explore")
-                add("Tips & wallet")
-                add(if (uiState.loggedIn) "Sign out" else "Sign in (tipper)")
-                add("YouTube spike (QA)")
-            }
-        }
+    val hubEntries = remember(uiState.loggedIn) { TvMvpNavigation.hubEntries(uiState.loggedIn) }
+    val labels = remember(hubEntries) { hubEntries.map { it.label } }
     val selectedIndexState = rememberUpdatedState(selectedActionIndex)
     val labelsState = rememberUpdatedState(labels)
 
     val actions: List<() -> Unit> =
         remember(uiState.loggedIn) {
             buildList {
-                add(onScreenDisplay)
-                add(onCommunityRoom)
                 add(onLiveTv)
-                add(onExplore)
                 add(onTipsWallet)
                 add(if (uiState.loggedIn) ({ viewModel.signOut() }) else onSignIn)
-                add(onYouTubeSpike)
             }
         }
 
@@ -166,7 +149,7 @@ fun JourneyHubScreen(
                 if (uiState.loggedIn) {
                     "Signed in as ${uiState.tipperEmail ?: "tipper"}"
                 } else {
-                    "Sign in for LIVE TV and Explore"
+                    "Sign in to tip on LIVE TV"
                 },
             color = TvAppColors.TextSecondary,
             fontSize = 16.sp,
