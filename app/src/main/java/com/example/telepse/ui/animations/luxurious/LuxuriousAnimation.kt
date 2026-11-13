@@ -9,6 +9,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.PlaybackException
@@ -21,22 +22,23 @@ import kotlinx.coroutines.delay
 /**
  * Luxurious style animation that plays the crown video at the bottom center of the screen
  * with a stagger effect.
- * 
+ *
  * This matches the JavaScript luxuriousStyle function behavior:
  * - Video plays at bottom center (60px from bottom)
  * - Multiple videos can play simultaneously with stagger delay
  * - Each video is 350px x 350px
  * - Video loops while playing
  * - Video is removed after duration
- * 
+ *
  * Uses the local crown.webm resource from res/raw to avoid download time.
- * 
+ *
  * @param videoUri URI of the video to play (local resource)
  * @param count Number of videos to play simultaneously (default: 1)
  * @param stagger Delay between each video start in seconds (default: 0.2)
  * @param duration Duration each video plays in seconds (default: 8)
  * @param modifier Modifier for the container
  */
+@UnstableApi
 @Composable
 fun LuxuriousAnimation(
     videoUri: Uri,
@@ -59,7 +61,7 @@ fun LuxuriousAnimation(
         // In JS: videos are positioned at bottom: 0, left: 50%, transform: translateX(-50%)
         repeat(count) { index ->
             val staggerDelay = index * stagger
-            
+
             // Create video player for this video
             // Positioned at bottom center (bottom: 0, centered horizontally)
             LuxuriousVideoPlayer(
@@ -77,12 +79,13 @@ fun LuxuriousAnimation(
 
 /**
  * Individual video player for Luxurious animation.
- * 
+ *
  * @param videoUri URI of the video to play (local resource)
  * @param staggerDelaySeconds Delay before starting playback
  * @param durationSeconds How long to play before removing
  * @param modifier Modifier for the video player
  */
+@UnstableApi
 @Composable
 private fun LuxuriousVideoPlayer(
     videoUri: Uri,
@@ -95,7 +98,7 @@ private fun LuxuriousVideoPlayer(
     var shouldRemove by remember { mutableStateOf(false) }
     var playerError by remember { mutableStateOf<String?>(null) }
     var playerReady by remember { mutableStateOf(false) }
-    
+
     // Create ExoPlayer instance - make it nullable to handle errors gracefully
     val exoPlayer: ExoPlayer? = remember(videoUri) {
         try {
@@ -105,7 +108,7 @@ private fun LuxuriousVideoPlayer(
                     val mediaItem = MediaItem.fromUri(videoUri)
                     setMediaItem(mediaItem)
                     repeatMode = Player.REPEAT_MODE_ONE // Loop the video
-                    
+
                     // Add listener to track player state and errors
                     addListener(object : Player.Listener {
                         override fun onPlayerError(error: PlaybackException) {
@@ -113,7 +116,7 @@ private fun LuxuriousVideoPlayer(
                             Log.e("LuxuriousVideoPlayer", "Player error: ${error.message}", error)
                             Log.e("LuxuriousVideoPlayer", "Error cause: ${error.cause?.message}")
                         }
-                        
+
                         override fun onPlaybackStateChanged(playbackState: Int) {
                             Log.d("LuxuriousVideoPlayer", "Playback state changed: $playbackState")
                             when (playbackState) {
@@ -132,12 +135,12 @@ private fun LuxuriousVideoPlayer(
                                 }
                             }
                         }
-                        
+
                         override fun onIsPlayingChanged(isPlaying: Boolean) {
                             Log.d("LuxuriousVideoPlayer", "Is playing: $isPlaying")
                         }
                     })
-                    
+
                     prepare()
                     Log.d("LuxuriousVideoPlayer", "Player prepared successfully")
                 } catch (e: Exception) {
@@ -153,7 +156,7 @@ private fun LuxuriousVideoPlayer(
             null
         }
     }
-    
+
     // Handle stagger delay and playback
     LaunchedEffect(videoUri) {
         if (exoPlayer == null) {
@@ -161,23 +164,23 @@ private fun LuxuriousVideoPlayer(
             shouldRemove = true
             return@LaunchedEffect
         }
-        
+
         try {
             Log.d("LuxuriousVideoPlayer", "Starting playback sequence, stagger delay: ${staggerDelaySeconds}s")
             // Wait for stagger delay
             delay((staggerDelaySeconds * 1000).toLong())
-            
+
             // Start playing
             Log.d("LuxuriousVideoPlayer", "Starting playback after stagger delay")
             shouldStartPlaying = true
-            
+
             // Small delay to ensure view is ready
             delay(200)
             exoPlayer?.let { player ->
                 player.playWhenReady = true
                 Log.d("LuxuriousVideoPlayer", "Playback started, duration: ${durationSeconds}s")
             }
-            
+
             // Wait for duration, then remove
             delay((durationSeconds * 1000).toLong())
             Log.d("LuxuriousVideoPlayer", "Duration complete, removing video")
@@ -193,7 +196,7 @@ private fun LuxuriousVideoPlayer(
             shouldRemove = true
         }
     }
-    
+
     // Cleanup when component is removed
     DisposableEffect(videoUri) {
         onDispose {
@@ -208,7 +211,7 @@ private fun LuxuriousVideoPlayer(
             }
         }
     }
-    
+
     // Show error message if there's an error
     if (playerError != null && !shouldRemove) {
         Box(
@@ -219,7 +222,7 @@ private fun LuxuriousVideoPlayer(
             // Error state - could show a placeholder or log
         }
     }
-    
+
     // Only render PlayerView if player exists and not removed
     if (!shouldRemove && exoPlayer != null) {
         Log.d("LuxuriousVideoPlayer", "Rendering PlayerView (shouldStartPlaying: $shouldStartPlaying)")

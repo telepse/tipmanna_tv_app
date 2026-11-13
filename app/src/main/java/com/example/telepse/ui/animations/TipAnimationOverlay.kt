@@ -6,8 +6,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.zIndex
+import androidx.media3.common.util.UnstableApi
 import com.example.telepse.ui.viewmodel.AnimationTrigger
 
+@UnstableApi
 @Composable
 fun TipAnimationOverlay(
     animations: List<AnimationTrigger>,

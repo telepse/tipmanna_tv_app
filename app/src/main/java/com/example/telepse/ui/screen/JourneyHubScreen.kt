@@ -1,6 +1,9 @@
 package com.example.telepse.ui.screen
 
+import android.widget.Toast
 import android.util.Log
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,9 +15,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import com.example.telepse.legal.LegalDocument
+import com.example.telepse.legal.TvLegalExternalLink
+import com.example.telepse.ui.legal.TvLegalLinkConfirmDialog
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -28,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.ExperimentalTvMaterial3Api
+import com.example.telepse.ui.navigation.PreMvpNavigation
 import com.example.telepse.ui.tv.TvAppColors
 import com.example.telepse.ui.tv.TvFocusBridge
 import com.example.telepse.ui.tv.TvHubNavRow
@@ -41,44 +49,36 @@ private const val JOURNEY_HUB_LOG_TAG = "JourneyHub"
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun JourneyHubScreen(
-    onScreenDisplay: () -> Unit,
     onLiveTv: () -> Unit,
     onExplore: () -> Unit,
-    onTipsWallet: () -> Unit,
+    onBlockedHosts: () -> Unit,
     onSignIn: () -> Unit,
-    onYouTubeSpike: () -> Unit,
-    onCommunityRoom: () -> Unit,
     viewModel: JourneyHubViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
     val listFocus = remember { FocusRequester() }
     var selectedActionIndex by remember { mutableIntStateOf(0) }
+    var pendingLegalDocument by remember { mutableStateOf<LegalDocument?>(null) }
 
-    val labels =
-        remember(uiState.loggedIn) {
-            buildList {
-                add("Event screen display")
-                add("Community room display")
-                add("Watch LIVE TV")
-                add("Explore")
-                add("Tips & wallet")
-                add(if (uiState.loggedIn) "Sign out" else "Sign in (tipper)")
-                add("YouTube spike (QA)")
-            }
-        }
+    val hubEntries = remember(uiState.loggedIn) { PreMvpNavigation.allHubEntries(uiState.loggedIn) }
+    val labels = remember(hubEntries) { hubEntries.map { it.label } }
     val selectedIndexState = rememberUpdatedState(selectedActionIndex)
     val labelsState = rememberUpdatedState(labels)
 
     val actions: List<() -> Unit> =
         remember(uiState.loggedIn) {
             buildList {
-                add(onScreenDisplay)
-                add(onCommunityRoom)
                 add(onLiveTv)
                 add(onExplore)
-                add(onTipsWallet)
+                if (uiState.loggedIn) {
+                    add(onBlockedHosts)
+                }
                 add(if (uiState.loggedIn) ({ viewModel.signOut() }) else onSignIn)
-                add(onYouTubeSpike)
+                PreMvpNavigation.legalHubEntries().forEach { entry ->
+                    val doc = entry.legalDocument!!
+                    add { pendingLegalDocument = doc }
+                }
             }
         }
 
@@ -106,6 +106,7 @@ fun JourneyHubScreen(
         }
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     TvLazyColumn(
         modifier =
             Modifier.fillMaxSize()
@@ -177,6 +178,24 @@ fun JourneyHubScreen(
                 text = label,
                 isSelected = index == selectedActionIndex,
                 modifier = Modifier.padding(bottom = if (index < labels.lastIndex) 12.dp else 0.dp),
+            )
+        }
+    }
+        pendingLegalDocument?.let { doc ->
+            TvLegalLinkConfirmDialog(
+                document = doc,
+                url = doc.url(),
+                onConfirmOpen = {
+                    when (TvLegalExternalLink.openHttpsPage(context, doc.url())) {
+                        TvLegalExternalLink.OpenResult.Opened -> Unit
+                        TvLegalExternalLink.OpenResult.NoBrowser ->
+                            Toast.makeText(context, "No browser available on this device", Toast.LENGTH_LONG).show()
+                        TvLegalExternalLink.OpenResult.BlockedInvalidUrl ->
+                            Toast.makeText(context, "Could not open link", Toast.LENGTH_LONG).show()
+                    }
+                    pendingLegalDocument = null
+                },
+                onDismiss = { pendingLegalDocument = null },
             )
         }
     }

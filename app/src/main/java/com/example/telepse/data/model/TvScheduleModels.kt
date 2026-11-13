@@ -22,6 +22,8 @@ data class TvScheduleItem(
 
 @Serializable
 data class TvScheduleChannel(
+    /** EventChannel UUID for share deep link `?v=` (matches web TV `current.channel.id`). */
+    val id: String? = null,
     val url: String? = null,
     val title: String? = null,
     /** Authoritative LIVE tip catalog event id from schedule channel. */

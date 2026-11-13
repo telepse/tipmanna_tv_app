@@ -33,15 +33,18 @@ import com.example.telepse.ui.screen.ExplorePlaceholderScreen
 import com.example.telepse.ui.screen.ExplorePlaybackScreen
 import com.example.telepse.ui.screen.FullDisplayScreen
 import com.example.telepse.ui.screen.FundraisingMilestoneScreen
+import com.example.telepse.ui.screen.BlockedHostsScreen
 import com.example.telepse.ui.screen.JourneyHubScreen
 import com.example.telepse.ui.screen.LiveTvFoundationScreen
 import com.example.telepse.ui.screen.TipperLoginScreen
 import com.example.telepse.ui.screen.TipsWalletScreen
 import com.example.telepse.ui.screen.YouTubePlaybackSpikeScreen
 import com.example.telepse.ui.theme.TelepseTheme
+import androidx.media3.common.util.UnstableApi
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
+@UnstableApi
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
@@ -49,24 +52,22 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var screenDisplaySessionStore: ScreenDisplaySessionStore
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (event.action == KeyEvent.ACTION_DOWN) {
-            when (event.keyCode) {
-                KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    if (TvFocusBridge.onDpadDown != null) {
-                        TvFocusBridge.onDpadDown?.invoke()
-                        return true
-                    }
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                if (TvFocusBridge.onDpadDown != null) {
+                    TvFocusBridge.onDpadDown?.invoke()
+                    return true
                 }
-                KeyEvent.KEYCODE_DPAD_UP -> {
-                    if (TvFocusBridge.onDpadUp != null) {
-                        TvFocusBridge.onDpadUp?.invoke()
-                        return true
-                    }
+            }
+            KeyEvent.KEYCODE_DPAD_UP -> {
+                if (TvFocusBridge.onDpadUp != null) {
+                    TvFocusBridge.onDpadUp?.invoke()
+                    return true
                 }
             }
         }
-        return super.dispatchKeyEvent(event)
+        return super.onKeyDown(keyCode, event)
     }
 
     @OptIn(ExperimentalTvMaterial3Api::class)
@@ -85,6 +86,7 @@ class MainActivity : ComponentActivity() {
 
 private const val NAV_LOG_TAG = "TelepseNav"
 
+@UnstableApi
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun TelepseApp(
@@ -159,10 +161,6 @@ fun TelepseApp(
     when (val screen = currentScreen) {
         is Screen.JourneyHub -> {
             JourneyHubScreen(
-                onScreenDisplay = {
-                    Log.d(NAV_LOG_TAG, "journey dest=CodeInput")
-                    currentScreen = Screen.CodeInput
-                },
                 onLiveTv = {
                     Log.d(NAV_LOG_TAG, "journey dest=LiveTvFoundation (auth gated)")
                     requireAuth(Screen.LiveTvFoundation) {
@@ -177,23 +175,14 @@ fun TelepseApp(
                         currentScreen = Screen.ExplorePlaceholder
                     }
                 },
-                onTipsWallet = {
-                    Log.d(NAV_LOG_TAG, "journey dest=TipsWallet (auth gated)")
-                    requireAuth(Screen.TipsWallet) {
-                        currentScreen = Screen.TipsWallet
+                onBlockedHosts = {
+                    requireAuth(Screen.BlockedHosts) {
+                        currentScreen = Screen.BlockedHosts
                     }
                 },
                 onSignIn = {
                     Log.d(NAV_LOG_TAG, "journey dest=TipperLogin returnTo=JourneyHub")
                     currentScreen = Screen.TipperLogin(returnTo = Screen.JourneyHub)
-                },
-                onYouTubeSpike = {
-                    Log.d(NAV_LOG_TAG, "journey dest=YouTubePlaybackSpike")
-                    currentScreen = Screen.YouTubePlaybackSpike
-                },
-                onCommunityRoom = {
-                    Log.d(NAV_LOG_TAG, "journey dest=CommunityRoomIdInput")
-                    currentScreen = Screen.CommunityRoomIdInput
                 },
             )
         }
@@ -244,6 +233,10 @@ fun TelepseApp(
             )
         }
 
+        is Screen.BlockedHosts -> {
+            BlockedHostsScreen(onBack = { currentScreen = Screen.JourneyHub })
+        }
+
         is Screen.LiveTvFoundation -> {
             LiveTvFoundationScreen(
                 onBack = { currentScreen = Screen.JourneyHub },
@@ -253,8 +246,14 @@ fun TelepseApp(
         is Screen.ExplorePlaceholder -> {
             ExplorePlaceholderScreen(
                 onBack = { currentScreen = Screen.JourneyHub },
-                onOpenVideo = { videoId, title ->
-                    currentScreen = Screen.ExplorePlayback(videoId = videoId, title = title)
+                onOpenVideo = { videoId, title, eventId, channelId ->
+                    currentScreen =
+                        Screen.ExplorePlayback(
+                            videoId = videoId,
+                            title = title,
+                            eventId = eventId,
+                            channelId = channelId,
+                        )
                 },
             )
         }
@@ -263,6 +262,8 @@ fun TelepseApp(
             ExplorePlaybackScreen(
                 videoId = screen.videoId,
                 title = screen.title,
+                eventId = screen.eventId,
+                channelId = screen.channelId,
                 onBack = { currentScreen = Screen.ExplorePlaceholder },
             )
         }

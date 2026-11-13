@@ -1,0 +1,55 @@
+{
+  "_notice": "Operator-supplied read-only staging DB rows (2026-11-13). No secrets. Not the isolated P4 fixture (synthetic staging QA account / STG-CHANNEL-ISOLATED). File for correlation only.",
+  "executionContext": {
+    "capturedAtUtc": "2026-11-13",
+    "isolatedFixtureUnusedReason": "Synthetic staging QA email (example.test) could not complete TV email verification / OTP",
+    "tvSmokeApkSha256": "DA83F69A1B64110D3AD0B2180AC6FBF63F0AD62D2157EA5E95ECF360EA9E4DAA",
+    "backendDeploySha": "fc29451b0cb25c91a965c0cce027f2680bca8828"
+  },
+  "contentReports": [
+    {
+      "id": "STG-CR-E1",
+      "channelId": "STG-CHANNEL-EXEC",
+      "reporterTipperId": "STG-TIPPER-A",
+      "reporterHostId": null,
+      "reason": "deceptive",
+      "otherText": null,
+      "createdAt": "2026-11-13 09:13:13.512"
+    }
+  ],
+  "hostReports": [
+    {
+      "id": "STG-CR-E2",
+      "hostId": "STG-TIPPER-A",
+      "reporterTipperId": "STG-TIPPER-A",
+      "reporterHostId": null,
+      "reason": "deceptive",
+      "otherText": null,
+      "contextChannelId": "STG-CHANNEL-EXEC",
+      "createdAt": "2026-11-13 09:14:02.406"
+    }
+  ],
+  "tipperBlockedHosts": [
+    {
+      "id": "STG-BLK-E3",
+      "tipperId": "STG-TIPPER-A",
+      "hostId": "STG-HOST-E3-BLOCKED",
+      "createdAt": "2026-11-13 10:06:32.811"
+    }
+  ],
+  "operatorNotifications": {
+    "e1VideoReport": "How to cook a perfect steak every time — deceptive content (QA sink)",
+    "e2HostReport": "Staging QA host display name reported (operator notification sink)"
+  },
+  "identityMappingNotes": {
+    "e2ReportedHostId": "STG-TIPPER-A",
+    "e3BlockedHostId": "STG-HOST-E3-BLOCKED",
+    "sameHostForE2AndE3": false
+  },
+  "correlationLimits": [
+    "Repo cannot verify reporterTipperId STG-TIPPER-A is Account A tipper vs staging HOST_COMMUNITY id (see reconciliation doc).",
+    "HostReport.hostId equals reporterTipperId — semantic validity not established in git.",
+    "Blocked hostId STG-HOST-E3-BLOCKED differs from HostReport.hostId STG-TIPPER-A — E2 and E3 may reference different hosts.",
+    "channelId STG-CHANNEL-EXEC not mapped to host in repo without operator GET saved-hosts export."
+  ]
+}

@@ -39,25 +39,46 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import com.example.telepse.BuildConfig
 import com.example.telepse.livetv.TvModeEnginePhase
+import com.example.telepse.premvp.PreMvpFeatureFlags
+import com.example.telepse.share.resolveLiveTvShareIds
 import com.example.telepse.ui.animations.TipAnimationOverlay
 import com.example.telepse.ui.livetv.LiveTvTipDrawer
 import com.example.telepse.ui.livetv.LiveTvTipPreviewStrip
+import com.example.telepse.ui.moderation.TvModerationDialogOverlay
+import com.example.telepse.ui.moderation.TvModerationToast
+import com.example.telepse.ui.share.VideoShareQrOverlay
 import com.example.telepse.ui.tv.TvAppColors
 import com.example.telepse.ui.tv.TvLazyRow
 import com.example.telepse.ui.tv.TvPlayerControlChip
 import com.example.telepse.ui.tv.requestInitialTvFocus
 import com.example.telepse.ui.tv.tvNotFocusable
 import com.example.telepse.ui.viewmodel.LiveTvFoundationViewModel
+import com.example.telepse.ui.viewmodel.TvModerationEffect
+import com.example.telepse.ui.viewmodel.TvModerationViewModel
+import androidx.media3.common.util.UnstableApi
 
+@UnstableApi
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun LiveTvFoundationScreen(
     onBack: () -> Unit,
     viewModel: LiveTvFoundationViewModel = hiltViewModel(),
+    moderationViewModel: TvModerationViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val moderationState by moderationViewModel.state.collectAsState()
+    LaunchedEffect(moderationViewModel) {
+        moderationViewModel.effects.collect { effect ->
+            if (effect is TvModerationEffect.RefreshFeeds) {
+                viewModel.refreshSchedule()
+            }
+        }
+    }
     val engine = uiState.engine
     val tip = uiState.tip
+    val paymentUxEnabled = PreMvpFeatureFlags.enableTvPaymentUx
+    val shareIds = remember(engine.schedule, engine.target) { resolveLiveTvShareIds(engine.schedule, engine.target) }
+    val reportChannelId = shareIds?.channelId
     val lifecycleOwner = LocalLifecycleOwner.current
     val backFocus = remember { FocusRequester() }
     val scheduleFocus = remember { FocusRequester() }
@@ -67,6 +88,9 @@ fun LiveTvFoundationScreen(
     val pauseFocus = remember { FocusRequester() }
     val muteFocus = remember { FocusRequester() }
     val seekFocus = remember { FocusRequester() }
+    val reportVideoFocus = remember { FocusRequester() }
+    val reportHostFocus = remember { FocusRequester() }
+    val blockHostFocus = remember { FocusRequester() }
     val firstTipChipFocus = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
@@ -89,10 +113,10 @@ fun LiveTvFoundationScreen(
         }
     }
 
-    BackHandler(enabled = tip.showDrawer && (tip.walletPay.isActive || tip.qrPay.isActive)) {
+    BackHandler(enabled = paymentUxEnabled && tip.showDrawer && (tip.walletPay.isActive || tip.qrPay.isActive)) {
         viewModel.onWalletPayBack()
     }
-    BackHandler(enabled = tip.showDrawer && !tip.walletPay.isActive && !tip.qrPay.isActive) {
+    BackHandler(enabled = paymentUxEnabled && tip.showDrawer && !tip.walletPay.isActive && !tip.qrPay.isActive) {
         viewModel.closeTipDrawer()
     }
     BackHandler(enabled = !tip.showDrawer && uiState.showSchedulePanel) {
@@ -207,7 +231,7 @@ fun LiveTvFoundationScreen(
             )
         }
 
-        if (tip.showDrawer) {
+        if (paymentUxEnabled && tip.showDrawer) {
             LiveTvTipDrawer(
                 tip = tip,
                 onClose = viewModel::closeTipDrawer,
@@ -247,7 +271,7 @@ fun LiveTvFoundationScreen(
             else -> Unit
         }
 
-        if (!tip.showDrawer && !uiState.showSchedulePanel) {
+        if (paymentUxEnabled && !tip.showDrawer && !uiState.showSchedulePanel) {
             LiveTvTipPreviewStrip(
                 tip = tip,
                 onSelectCharacter = viewModel::selectTipCharacter,
@@ -274,6 +298,8 @@ fun LiveTvFoundationScreen(
                     .padding(horizontal = 20.dp, vertical = 24.dp),
         ) {
             TvLazyRow {
+                val scheduleChainRight = if (paymentUxEnabled) tipsFocus else refreshFocus
+                val refreshChainLeft = if (paymentUxEnabled) tipsFocus else scheduleFocus
                 TvPlayerControlChip(
                     label = "Back",
                     onClick = onBack,
@@ -285,34 +311,36 @@ fun LiveTvFoundationScreen(
                     onClick = viewModel::toggleSchedulePanel,
                     focusRequester = scheduleFocus,
                     focusChainLeft = backFocus,
-                    focusChainRight = tipsFocus,
+                    focusChainRight = scheduleChainRight,
                 )
-                TvPlayerControlChip(
-                    label =
-                        when {
-                            tip.showDrawer -> "Close tips"
-                            tip.showStrip && tip.cart.itemCount > 0 ->
-                                "Hide tips (${tip.cart.itemCount})"
-                            tip.showStrip -> "Hide tips"
-                            tip.cart.itemCount > 0 -> "Tips (${tip.cart.itemCount})"
-                            else -> "Tips"
+                if (paymentUxEnabled) {
+                    TvPlayerControlChip(
+                        label =
+                            when {
+                                tip.showDrawer -> "Close tips"
+                                tip.showStrip && tip.cart.itemCount > 0 ->
+                                    "Hide tips (${tip.cart.itemCount})"
+                                tip.showStrip -> "Hide tips"
+                                tip.cart.itemCount > 0 -> "Tips (${tip.cart.itemCount})"
+                                else -> "Tips"
+                            },
+                        onClick = {
+                            when {
+                                tip.showDrawer -> viewModel.closeTipDrawer()
+                                else -> viewModel.toggleTipStrip()
+                            }
                         },
-                    onClick = {
-                        when {
-                            tip.showDrawer -> viewModel.closeTipDrawer()
-                            else -> viewModel.toggleTipStrip()
-                        }
-                    },
-                    focusRequester = tipsFocus,
-                    focusChainLeft = scheduleFocus,
-                    focusChainRight = refreshFocus,
-                    focusChainUp = firstTipChipFocus,
-                )
+                        focusRequester = tipsFocus,
+                        focusChainLeft = scheduleFocus,
+                        focusChainRight = refreshFocus,
+                        focusChainUp = firstTipChipFocus,
+                    )
+                }
                 TvPlayerControlChip(
                     label = "Refresh",
                     onClick = viewModel::refreshSchedule,
                     focusRequester = refreshFocus,
-                    focusChainLeft = tipsFocus,
+                    focusChainLeft = refreshChainLeft,
                     focusChainRight = playFocus,
                 )
                 TvPlayerControlChip(
@@ -341,9 +369,67 @@ fun LiveTvFoundationScreen(
                     onClick = viewModel::seekForward30Seconds,
                     focusRequester = seekFocus,
                     focusChainLeft = muteFocus,
+                    focusChainRight = reportVideoFocus,
                     enabled = viewModel.canSeekForward(),
                 )
+                TvPlayerControlChip(
+                    label = "Report video",
+                    onClick = {
+                        reportChannelId?.let { moderationViewModel.openReportVideoDialog(it) }
+                    },
+                    focusRequester = reportVideoFocus,
+                    focusChainLeft = seekFocus,
+                    focusChainRight = reportHostFocus,
+                    enabled = !reportChannelId.isNullOrBlank(),
+                )
+                TvPlayerControlChip(
+                    label = "Report host",
+                    onClick = {
+                        reportChannelId?.let { moderationViewModel.openReportHostDialog(it) }
+                    },
+                    focusRequester = reportHostFocus,
+                    focusChainLeft = reportVideoFocus,
+                    focusChainRight = blockHostFocus,
+                    enabled = !reportChannelId.isNullOrBlank(),
+                )
+                TvPlayerControlChip(
+                    label = "Block host",
+                    onClick = {
+                        reportChannelId?.let { moderationViewModel.openBlockHostDialog(it) }
+                    },
+                    focusRequester = blockHostFocus,
+                    focusChainLeft = reportHostFocus,
+                    enabled = !reportChannelId.isNullOrBlank(),
+                )
             }
+        }
+
+        moderationState.successMessage?.let { message ->
+            TvModerationToast(
+                message = message,
+                modifier =
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 120.dp),
+            )
+        }
+
+        if (!reportChannelId.isNullOrBlank()) {
+            TvModerationDialogOverlay(
+                channelId = reportChannelId,
+                state = moderationState,
+                moderationViewModel = moderationViewModel,
+            )
+        }
+
+        if (engine.phase != TvModeEnginePhase.Empty && engine.phase != TvModeEnginePhase.Error) {
+            VideoShareQrOverlay(
+                eventId = shareIds?.eventId,
+                channelId = shareIds?.channelId,
+                modifier =
+                    Modifier.align(Alignment.TopEnd)
+                        .padding(top = 20.dp, end = 28.dp),
+            )
         }
 
         TipAnimationOverlay(

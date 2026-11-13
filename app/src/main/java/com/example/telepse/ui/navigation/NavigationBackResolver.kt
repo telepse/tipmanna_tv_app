@@ -10,6 +10,7 @@ object NavigationBackResolver {
             is Screen.TipperLogin -> Screen.JourneyHub
             is Screen.CodeInput -> Screen.JourneyHub
             is Screen.ExplorePlayback -> Screen.ExplorePlaceholder
+            is Screen.BlockedHosts,
             is Screen.LiveTvFoundation,
             is Screen.ExplorePlaceholder,
             is Screen.TipsWallet,

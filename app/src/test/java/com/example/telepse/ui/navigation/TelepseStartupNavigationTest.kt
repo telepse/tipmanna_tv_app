@@ -49,8 +49,8 @@ class TelepseStartupNavigationTest {
     }
 
     @Test
-    fun shouldScheduleRestore_whenResumingFromBackgroundOnHub() {
-        assertTrue(
+    fun shouldScheduleRestore_disabledForPreMvpConsumptionBranch() {
+        assertFalse(
             shouldScheduleScreenDisplayRestoreOnStart(
                 isFirstOnStartSinceProcessLaunched = false,
                 savedEventId = "evt-42",

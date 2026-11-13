@@ -14,3 +14,8 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Local build noise and private evidence (publication branch)
+build-*.log
+.kotlin/errors/
+test-evidence/_private-archive/

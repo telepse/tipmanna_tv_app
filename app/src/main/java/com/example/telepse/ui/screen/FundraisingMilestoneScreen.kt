@@ -42,6 +42,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.ExperimentalTvMaterial3Api
@@ -88,14 +89,14 @@ internal class ExoPlayerManager(context: Context) {
     private var _player: ExoPlayer? = null
     private var isReleased = false
     private var currentUri: Uri? = null
-    
+
     val player: ExoPlayer = ExoPlayer.Builder(context)
         .build()
         .apply {
             repeatMode = Player.REPEAT_MODE_ONE
             _player = this
         }
-    
+
     /**
      * Thread-safe media update with idempotency check.
      * Prevents redundant updates and ensures only one update at a time.
@@ -106,27 +107,27 @@ internal class ExoPlayerManager(context: Context) {
             android.util.Log.w("ExoPlayerManager", "⚠️ Cannot update - player released (pre-check)")
             return
         }
-        
+
         mutex.withLock {
             // CRITICAL: Check for cancellation at the start
             yield() // Checks for cancellation
-            
+
             // Double-check released state after acquiring mutex
             if (isReleased) {
                 android.util.Log.w("ExoPlayerManager", "⚠️ Cannot update - player released (post-check)")
                 return@withLock
             }
-            
+
             // Skip if same URI (prevents redundant updates)
             if (currentUri == uri) {
                 android.util.Log.d("ExoPlayerManager", "⏭️ Skipping - same URI already loaded: $uri")
                 return@withLock
             }
-            
+
             _player?.let { exoPlayer ->
                 try {
                     android.util.Log.d("ExoPlayerManager", "🎬 Updating media (mutex locked): $uri")
-                
+
                 // Check if player is still valid before any operation
                 try {
                     val state = exoPlayer.playbackState
@@ -137,10 +138,10 @@ internal class ExoPlayerManager(context: Context) {
                     currentUri = null
                     return@withLock
                 }
-                
+
                 // Check for cancellation before stopping
                 yield() // Checks for cancellation
-                
+
                 // Stop current playback safely
                 try {
                     when (exoPlayer.playbackState) {
@@ -166,19 +167,19 @@ internal class ExoPlayerManager(context: Context) {
                     currentUri = null
                     return@withLock
                 }
-                
+
                 // Check for cancellation before setting new media
                 yield() // Checks for cancellation
-                
+
                 // Set new media with comprehensive error handling
                 try {
                     val mediaItem = MediaItem.fromUri(uri)
                     exoPlayer.setMediaItem(mediaItem)
                     exoPlayer.prepare()
                     exoPlayer.playWhenReady = true
-                    
+
                     currentUri = uri
-                    
+
                     android.util.Log.d("ExoPlayerManager", "✅ Media updated successfully to: $uri")
                 } catch (e: IllegalStateException) {
                     android.util.Log.e("ExoPlayerManager", "❌ IllegalStateException setting media", e)
@@ -186,7 +187,7 @@ internal class ExoPlayerManager(context: Context) {
                     currentUri = null
                     return@withLock
                 }
-                
+
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     android.util.Log.d("ExoPlayerManager", "⚠️ Update cancelled (event switching)")
                     // Don't update currentUri - leave it as is for next valid update
@@ -206,13 +207,13 @@ internal class ExoPlayerManager(context: Context) {
             }
         }
     }
-    
+
     /**
      * Stop playback safely.
      */
     suspend fun stop(): Unit = mutex.withLock {
         if (isReleased) return@withLock
-        
+
         _player?.let { exoPlayer ->
             try {
                 if (exoPlayer.playbackState != Player.STATE_IDLE) {
@@ -224,7 +225,7 @@ internal class ExoPlayerManager(context: Context) {
             }
         }
     }
-    
+
     /**
      * Reset player state without releasing the instance.
      * Use when switching events to ensure clean state.
@@ -244,17 +245,17 @@ internal class ExoPlayerManager(context: Context) {
         }
         currentUri = null // Clear URI so next event will load
     }
-    
+
     /**
      * Release player resources.
      * This is a regular function, not suspend, for DisposableEffect compatibility.
      */
     fun release() {
         android.util.Log.d("ExoPlayerManager", "🗑️ Releasing player")
-        
+
         // CRITICAL: Set isReleased FIRST to stop any pending updateMedia calls
         isReleased = true
-        
+
         _player?.let { exoPlayer ->
             try {
                 exoPlayer.stop()
@@ -288,13 +289,14 @@ private fun getTextColorForBackground(backgroundType: String?, eventBackground: 
         }
         else -> "default"
     }
-    
+
     return when (normalizedId) {
         "islamic", "gaming" -> Color.Black
         else -> Color.White // default background
     }
 }
 
+@UnstableApi
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun FundraisingMilestoneScreen(
@@ -315,15 +317,15 @@ fun FundraisingMilestoneScreen(
             window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
-    
+
     // Fetch event details
     LaunchedEffect(eventId) {
         android.util.Log.d("FundraisingMilestoneScreen", "📥 [LOAD] Loading event: $eventId")
         viewModel.loadEvent(eventId)
     }
-    
+
     val event = uiState.event
-    
+
     // CRITICAL: Only render if event matches eventId to prevent stale data during transitions
     // If event data doesn't match eventId, treat it as loading state
     if (event != null && event.id == eventId) {
@@ -334,7 +336,7 @@ fun FundraisingMilestoneScreen(
 
         // Determine text color based on background type
         val textColor = getTextColorForBackground(event.backgroundType, event.eventBackground)
-        
+
         Box(modifier = Modifier.fillMaxSize()) {
             // Network Status Indicator - shows at top when offline
             NetworkStatusIndicator(
@@ -343,7 +345,7 @@ fun FundraisingMilestoneScreen(
                     .align(Alignment.TopCenter)
                     .zIndex(2000f) // Above everything
             )
-            
+
             when (val media = backgroundMedia) {
                 is EventBackgroundMedia.LocalRaw -> {
                     val backgroundResourceId = media.resourceId
@@ -380,7 +382,7 @@ fun FundraisingMilestoneScreen(
                     )
                 }
             }
-            
+
             // Content Overlay - Full height container
             Box(
                 modifier = Modifier
@@ -411,7 +413,7 @@ fun FundraisingMilestoneScreen(
                             modifier = Modifier.size(24.dp)
                         )
                     }
-                    
+
                     // Star Icon (Top Right)
                     IconButton(
                         onClick = { /* Handle favorite */ },
@@ -428,7 +430,7 @@ fun FundraisingMilestoneScreen(
                         )
                     }
                 }
-                
+
                 // Center Content - Reordered according to requirements, full height
                 // Use SpaceBetween to push bottom content (QR code + title) to the bottom
                 Column(
@@ -453,7 +455,7 @@ fun FundraisingMilestoneScreen(
                             color = textColor,
                             modifier = Modifier.padding(bottom = 8.dp) // Reduced from 12.dp
                     )
-                    
+
                         // 2. Amount - Second (bold)
                         val displayAmount = if (event.showLatestAmount == true) {
                             event.latestTipAmount?.toInt() ?: 0
@@ -467,7 +469,7 @@ fun FundraisingMilestoneScreen(
                             color = textColor,
                             modifier = Modifier.padding(bottom = 6.dp) // Reduced from 8.dp
                     )
-                    
+
                         // 3. Money for - Auto-scrolling text
                     event.tipUsageDisclosure?.let { disclosures ->
                         if (disclosures.isNotEmpty()) {
@@ -480,14 +482,14 @@ fun FundraisingMilestoneScreen(
                             )
                         }
                     }
-                    
+
                         // 4. Progress Bar Section - Always show progress bar, but hide amount text when hideProgressBarAmount is true
                         val amountRaised = event.amountRaised?.toInt() ?: 0
                         // Track when tips are received to trigger glow animation
                         var previousAnimationCount by remember { mutableStateOf(uiState.pendingAnimations.size) }
                         var previousAmountRaised by remember { mutableStateOf(amountRaised) }
                         var shouldGlow by remember { mutableStateOf(false) }
-                        
+
                         LaunchedEffect(uiState.pendingAnimations.size, amountRaised) {
                             // Trigger glow when new animations are added (tip received)
                             if (uiState.pendingAnimations.size > previousAnimationCount) {
@@ -504,7 +506,7 @@ fun FundraisingMilestoneScreen(
                             previousAnimationCount = uiState.pendingAnimations.size
                             previousAmountRaised = amountRaised
                         }
-                        
+
                         ProgressBarSection(
                             amountRaised = amountRaised,
                             amountToRaise = event.amountToRaise?.toInt() ?: 0,
@@ -514,7 +516,7 @@ fun FundraisingMilestoneScreen(
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
-                    
+
                     // Bottom group - pushed to the bottom by SpaceBetween
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally
@@ -541,9 +543,9 @@ fun FundraisingMilestoneScreen(
                                 )
                             }
                         }
-                        
+
                         Spacer(modifier = Modifier.height(8.dp))
-                        
+
                         // 6. Title - Last (Event Name with background #212121 and border #667185)
                     Box(
                         modifier = Modifier
@@ -571,7 +573,7 @@ fun FundraisingMilestoneScreen(
                     }
                 }
             }
-            
+
             // Megaphone icon - Positioned absolutely at bottom left of screen
             Box(
                 modifier = Modifier
@@ -584,7 +586,7 @@ fun FundraisingMilestoneScreen(
                     contentDescription = "Megaphone"
                 )
             }
-            
+
             // Animation Overlay - MUST be last to appear on top of everything
             TipAnimationOverlay(
                 animations = uiState.pendingAnimations,
@@ -672,6 +674,7 @@ private fun RemoteImageBackground(
     )
 }
 
+@UnstableApi
 @Composable
 internal fun VideoBackground(
     uri: Uri,
@@ -680,15 +683,15 @@ internal fun VideoBackground(
     modifier: Modifier = Modifier
 ) {
     // Create a stable key that includes both resourceId and uri for proper cancellation
-    val backgroundKey = remember(uri, resourceId) { 
+    val backgroundKey = remember(uri, resourceId) {
         "${resourceId}_${uri.toString()}"
     }
-    
+
     android.util.Log.d("VideoBackground", "🔧 VideoBackground composable entered")
     android.util.Log.d("VideoBackground", "   - Resource ID: $resourceId")
     android.util.Log.d("VideoBackground", "   - URI: $uri")
     android.util.Log.d("VideoBackground", "   - Background Key: $backgroundKey")
-    
+
     // Update media when URI changes - playerManager handles synchronization
     // Using backgroundKey ensures LaunchedEffect cancels when event changes
     LaunchedEffect(backgroundKey) {
@@ -696,19 +699,19 @@ internal fun VideoBackground(
             android.util.Log.d("VideoBackground", "🔄 LaunchedEffect triggered")
             android.util.Log.d("VideoBackground", "   - Key: $backgroundKey")
             android.util.Log.d("VideoBackground", "   - URI: $uri")
-            
+
             // Small delay to allow previous LaunchedEffect to cancel
             kotlinx.coroutines.delay(50)
-            
+
             // Check if still active after delay
             yield() // Checks for cancellation
-            
+
             // CRITICAL: updateMedia is synchronized with mutex
             // Only one update can happen at a time, preventing race conditions
             playerManager.updateMedia(uri)
-            
+
             android.util.Log.d("VideoBackground", "✅ Video background update complete")
-            
+
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Cancellation is expected when switching events
             android.util.Log.d("VideoBackground", "⚠️ Video update cancelled (switching events)")
@@ -717,10 +720,10 @@ internal fun VideoBackground(
             android.util.Log.e("VideoBackground", "❌ Error in LaunchedEffect", e)
         }
     }
-    
+
     // NO cleanup in VideoBackground - player is managed at screen level
     // This prevents race conditions when switching events
-    
+
     AndroidView(
         factory = { ctx ->
             try {
@@ -767,14 +770,14 @@ fun ProgressBarSection(
     } else {
         0f
     }
-    
+
     // Glow animation when tip is received - smoother and brighter transition
     val glowAlpha by animateFloatAsState(
         targetValue = if (shouldGlow) 1f else 0f,
         animationSpec = tween(durationMillis = 800, easing = FastOutSlowInEasing),
         label = "glowAlpha"
     )
-    
+
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally
@@ -804,7 +807,7 @@ fun ProgressBarSection(
                             .fillMaxHeight()
                             .background(Color(0xFFE8562E), RoundedCornerShape(6.dp)) // Color #E8562E, just a bit rounded
                     )
-                    
+
                     // Glow effect overlay when tip is received - brighter and smoother transition
                     if (shouldGlow || glowAlpha > 0f) {
                         Box(
@@ -824,10 +827,10 @@ fun ProgressBarSection(
                         )
                     }
                 }
-                
+
                 // Spacing between progress bar and icon
                 Spacer(modifier = Modifier.width(16.dp))
-                
+
                 // Goal Icon (Diamond/Gem) - icon only, target is in row below
                     Image(
                         painter = painterResource(id = R.drawable.diamond),
@@ -837,7 +840,7 @@ fun ProgressBarSection(
                     )
             }
         }
-        
+
         // Row with three items below the progress bar: Amount Raised (left), tipmanna.com (center), Target (right)
         // All three on the same row, with target aligned to be beneath the icon
         if (showProgressAmounts) {
@@ -863,7 +866,7 @@ fun ProgressBarSection(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    
+
                     // Center: tipmanna.com
                     Text(
                         text = "tipmanna.com",
@@ -873,7 +876,7 @@ fun ProgressBarSection(
                         textAlign = TextAlign.Center,
                         maxLines = 1
                     )
-                    
+
                     // Right: Target Price (aligned to be beneath the icon)
                     Text(
                         text = "£$amountToRaise",
@@ -898,7 +901,7 @@ private fun ShakingSpeakerIcon(
 ) {
     val density = LocalDensity.current
     val infiniteTransition = rememberInfiniteTransition(label = "speakerShake")
-    
+
     // Rotation animation for wiggling effect
     val rotation by infiniteTransition.animateFloat(
         initialValue = -12f,
@@ -916,7 +919,7 @@ private fun ShakingSpeakerIcon(
         ),
         label = "speakerRotation"
     )
-    
+
     // Translation animation for additional shake effect
     val translationXValue by infiniteTransition.animateFloat(
         initialValue = -2f,
@@ -934,7 +937,7 @@ private fun ShakingSpeakerIcon(
         ),
         label = "speakerTranslationX"
     )
-    
+
     // No background box - just the image with animation
     Image(
         painter = painterResource(id = R.drawable.ic_speaker_shake),
@@ -958,7 +961,7 @@ fun QRCodeImage(
     val qrBitmap = remember(content) {
         generateQRCode(content, 512)
     }
-    
+
     qrBitmap?.let { bitmap ->
         // Display QR code directly without extra container - the bitmap already has white background
             Image(
@@ -989,10 +992,10 @@ private fun generateQRCode(content: String, size: Int): Bitmap? {
             put(EncodeHintType.CHARACTER_SET, "UTF-8")
             put(EncodeHintType.MARGIN, 0) // No margin so QR code fills entire space
         }
-        
+
         val writer = QRCodeWriter()
         val bitMatrix = writer.encode(content, BarcodeFormat.QR_CODE, size, size, hints)
-        
+
         // Use RGB_565 for better performance with white background
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565)
         for (x in 0 until size) {
@@ -1011,7 +1014,7 @@ private fun generateQRCode(content: String, size: Int): Bitmap? {
 /**
  * Composable that displays tip usage disclosure text with auto-scrolling animation.
  * Text enters from the left and exits from the right, repeating continuously.
- * 
+ *
  * @param disclosures List of tip usage disclosures
  * @param modifier Modifier for the component
  */
@@ -1033,29 +1036,29 @@ private fun ScrollingTipUsageText(
         }
         "for ${parts.joinToString(", ")}"
     }
-    
+
     // Create a shorter text by repeating it only twice for seamless scrolling (reduced from 3)
     val scrollingText = remember(text) {
         "$text  •  $text  •  " // Repeat with separator for seamless loop (reduced from 3 to 2)
     }
-    
+
     // Get container width (200px) and density for proper scrolling calculation
     val density = LocalDensity.current
-    val containerWidthPx: Float = with(density) { 
+    val containerWidthPx: Float = with(density) {
         200.dp.toPx()
     }
-    
+
     // Infinite transition for continuous scrolling
     val infiniteTransition = rememberInfiniteTransition(label = "scrollingText")
-    
+
     // Calculate text width (approximate: 1 character ≈ 8dp at 14sp)
-    val estimatedTextWidthPx: Float = with(density) { 
+    val estimatedTextWidthPx: Float = with(density) {
         val charCount = scrollingText.length
         val textWidthDp = 8.dp * charCount
         textWidthDp.toPx()
     }
     val scrollDistancePx: Float = estimatedTextWidthPx + containerWidthPx
-    
+
     // Animate the offset from right (positive) to left (negative) - reduced duration for faster scroll
     val offsetX by infiniteTransition.animateFloat(
         initialValue = containerWidthPx,
@@ -1070,7 +1073,7 @@ private fun ScrollingTipUsageText(
         ),
         label = "scrollOffset"
     )
-    
+
     Box(
         modifier = modifier
             .height(24.dp)

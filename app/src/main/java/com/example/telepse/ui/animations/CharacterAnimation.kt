@@ -16,14 +16,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.example.telepse.R
 import com.example.telepse.ui.animations.particle.*
+import androidx.media3.common.util.UnstableApi
 import com.example.telepse.ui.animations.luxurious.LuxuriousAnimation
 
 /**
  * Main composable for character/emoji animations.
- * 
+ *
  * This is the primary entry point for all animation types.
  * Simply call this function with the desired animation type and image URL.
- * 
+ *
  * Usage example:
  * ```
  * CharacterAnimation(
@@ -31,13 +32,14 @@ import com.example.telepse.ui.animations.luxurious.LuxuriousAnimation
  *     imageUrl = "https://example.com/emoji.png"
  * )
  * ```
- * 
+ *
  * @param animationType The type of animation to display
  * @param imageUrl URL of the image/emoji to animate
  * @param config Optional animation configuration (uses default if not provided)
  * @param modifier Modifier for the animation container
  * @param onAnimationComplete Optional callback when animation completes
  */
+@UnstableApi
 @Composable
 fun CharacterAnimation(
     animationType: AnimationType,
@@ -49,7 +51,7 @@ fun CharacterAnimation(
     val configuration = LocalConfiguration.current
     val screenWidth = configuration.screenWidthDp.dp
     val screenHeight = configuration.screenHeightDp.dp
-    
+
     // Screen Shock uses a different rendering approach
     if (animationType == AnimationType.SCREEN_SHOCK) {
         val icons = generateScreenShockIcons(
@@ -59,13 +61,13 @@ fun CharacterAnimation(
             screenHeight = screenHeight,
             glowOrigin = "bottom" // Default to bottom, can be made configurable
         )
-        
+
         // Trigger completion callback after animation duration (6000ms for Screen Shock)
         LaunchedEffect(Unit) {
             kotlinx.coroutines.delay(6000L + 300L) // 6000ms + 300ms buffer
             onAnimationComplete?.invoke()
         }
-        
+
         Box(modifier = modifier.fillMaxSize()) {
             ScreenShockAnimation(
                 icons = icons,
@@ -77,7 +79,7 @@ fun CharacterAnimation(
         }
         return
     }
-    
+
     // Spiral Float uses a different rendering approach (matching web version)
     if (animationType == AnimationType.FLOAT) {
         // Validate imageUrl before proceeding
@@ -85,10 +87,10 @@ fun CharacterAnimation(
             android.util.Log.w("CharacterAnimation", "FLOAT animation: imageUrl is blank, skipping")
             return
         }
-        
+
         // Web version uses 20000ms duration, minimum 20000ms
         val floatDuration = maxOf(config.durationMillis, 20000)
-        
+
         // Trigger completion callback after animation duration
         LaunchedEffect(Unit) {
             try {
@@ -98,7 +100,7 @@ fun CharacterAnimation(
                 android.util.Log.e("CharacterAnimation", "Error in FLOAT animation completion", e)
             }
         }
-        
+
         Box(modifier = modifier.fillMaxSize()) {
             SpiralFloatAnimation(
                 icons = listOf(imageUrl), // Web version accepts array of icons
@@ -115,24 +117,24 @@ fun CharacterAnimation(
         }
         return
     }
-    
+
     // Luxurious uses local crown video from res/raw (not from Cloudinary)
     if (animationType == AnimationType.LUXURIOUS) {
         val context = LocalContext.current
-        
+
         // Use local crown.webm resource instead of loading from Cloudinary
         val crownResourceId = R.raw.crown
         val crownVideoUri = Uri.parse("android.resource://${context.packageName}/$crownResourceId")
-        
+
         android.util.Log.d("CharacterAnimation", "🎬 LUXURIOUS animation triggered")
         android.util.Log.d("CharacterAnimation", "   - Crown resource ID: $crownResourceId")
         android.util.Log.d("CharacterAnimation", "   - Crown video URI: $crownVideoUri")
-        
+
         // Default values matching JavaScript: count=1, stagger=0.2s, duration=8s
         val count = 1
         val stagger = 0.2f
         val duration = 8f
-        
+
         // Trigger completion callback after animation duration
         LaunchedEffect(Unit) {
             try {
@@ -145,7 +147,7 @@ fun CharacterAnimation(
                 onAnimationComplete?.invoke() // Still call completion to avoid blocking
             }
         }
-        
+
         Box(modifier = modifier.fillMaxSize()) {
             // Position container at bottom center, 60dp from bottom
             Box(
@@ -165,7 +167,7 @@ fun CharacterAnimation(
         }
         return
     }
-    
+
     // Validate imageUrl for particle animations
     if (imageUrl.isBlank()) {
         android.util.Log.w("CharacterAnimation", "${animationType} animation: imageUrl is blank, skipping")
@@ -176,11 +178,11 @@ fun CharacterAnimation(
         }
         return
     }
-    
+
     android.util.Log.d("CharacterAnimation", "🎬 ${animationType} animation triggered")
     android.util.Log.d("CharacterAnimation", "   - Image URL: $imageUrl")
     android.util.Log.d("CharacterAnimation", "   - Screen size: ${screenWidth.value}dp x ${screenHeight.value}dp")
-    
+
     // Generate particles based on animation type
     val particles = when (animationType) {
         AnimationType.CONFETTI -> {
@@ -226,9 +228,9 @@ fun CharacterAnimation(
         AnimationType.SCREEN_SHOCK -> emptyList() // Handled above
         AnimationType.LUXURIOUS -> emptyList() // Handled above
     }
-    
+
     android.util.Log.d("CharacterAnimation", "   - Generated ${particles.size} particles")
-    
+
     // Trigger completion callback after animation duration
     // Add extra time to ensure particles have fully faded out and are removed from composition
     LaunchedEffect(Unit) {
@@ -241,7 +243,7 @@ fun CharacterAnimation(
         kotlinx.coroutines.delay(totalDuration.toLong())
         onAnimationComplete?.invoke()
     }
-    
+
     if (particles.isEmpty()) {
         android.util.Log.w("CharacterAnimation", "⚠️ No particles generated for ${animationType} animation")
         // Still call completion to avoid blocking the queue
@@ -251,9 +253,9 @@ fun CharacterAnimation(
         }
         return
     }
-    
+
     android.util.Log.d("CharacterAnimation", "   - Rendering ${particles.size} particles")
-    
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -265,7 +267,7 @@ fun CharacterAnimation(
             val duration: Int
             val minSize: Dp?
             val maxSize: Dp?
-            
+
             when (animationType) {
                 AnimationType.FALL -> {
                     minSize = 40.dp
@@ -280,11 +282,11 @@ fun CharacterAnimation(
                     duration = config.durationMillis
                 }
             }
-            
+
             if (index < 5) { // Log first 5 particles for debugging
                 android.util.Log.d("CharacterAnimation", "   - Particle $index: ${particle.imageUrl}, start: ${particle.startPosition}, end: ${particle.endPosition}")
             }
-            
+
             AnimatedParticle(
                 particle = particle,
                 size = particleSize,
