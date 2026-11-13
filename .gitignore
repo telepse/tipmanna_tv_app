@@ -18,4 +18,8 @@ local.properties
 # Local build noise and private evidence (publication branch)
 build-*.log
 .kotlin/errors/
+.kotlin/sessions/
 test-evidence/_private-archive/
+keystore.properties
+*.jks
+*.keystore

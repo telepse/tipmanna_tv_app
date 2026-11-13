@@ -2,6 +2,7 @@ package com.example.telepse.build
 
 import com.example.telepse.BuildConfig
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -21,6 +22,16 @@ class ApplicationIdFlavorTest {
             assertEquals("tv.tipmanna.androidtv.staging", BuildConfig.APPLICATION_ID)
         } else {
             assertEquals("tv.tipmanna.androidtv", BuildConfig.APPLICATION_ID)
+        }
+    }
+
+    @Test
+    fun videoShareQr_disabledOnProd_untilE2eVerified() {
+        val staging = BuildConfig.API_BASE_URL.contains("tipmanna-staging")
+        if (staging) {
+            assertTrue(BuildConfig.ENABLE_VIDEO_SHARE_QR)
+        } else {
+            assertFalse(BuildConfig.ENABLE_VIDEO_SHARE_QR)
         }
     }
 }

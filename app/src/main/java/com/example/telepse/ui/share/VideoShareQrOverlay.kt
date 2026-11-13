@@ -13,6 +13,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.ExperimentalTvMaterial3Api
+import com.example.telepse.premvp.PreMvpFeatureFlags
 import com.example.telepse.share.TipmannaShareUrl
 import com.example.telepse.ui.livetv.LiveTvQrCodeImage
 import com.example.telepse.ui.tv.TvAppColors
@@ -27,6 +28,7 @@ fun VideoShareQrOverlay(
     channelId: String?,
     modifier: Modifier = Modifier,
 ) {
+    if (!PreMvpFeatureFlags.enableVideoShareQr) return
     val url = TipmannaShareUrl.buildContentShareUrl(eventId, channelId) ?: return
     Column(
         modifier =
