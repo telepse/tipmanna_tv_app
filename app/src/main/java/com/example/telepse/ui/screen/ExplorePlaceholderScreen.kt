@@ -6,7 +6,7 @@ import androidx.compose.runtime.Composable
 @Composable
 fun ExplorePlaceholderScreen(
     onBack: () -> Unit,
-    onOpenVideo: (videoId: String, title: String) -> Unit,
+    onOpenVideo: (videoId: String, title: String, eventId: String, channelId: String) -> Unit,
 ) {
     ExploreTvScreen(onBack = onBack, onOpenVideo = onOpenVideo)
 }

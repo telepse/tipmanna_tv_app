@@ -16,12 +16,13 @@ fun LiveTvQrCodeImage(
     content: String,
     modifier: Modifier = Modifier,
     sizePx: Int = 512,
+    contentDescription: String = "Checkout QR code",
 ) {
     val bitmap =
         remember(content, sizePx) {
             generateQrBitmap(content, sizePx)
         }
-    Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Checkout QR code", modifier = modifier)
+    Image(bitmap = bitmap.asImageBitmap(), contentDescription = contentDescription, modifier = modifier)
 }
 
 private fun generateQrBitmap(content: String, sizePx: Int): Bitmap {

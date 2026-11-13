@@ -4,6 +4,7 @@ import com.example.telepse.data.model.Event
 
 sealed class Screen {
     data object JourneyHub : Screen()
+    data object BlockedHosts : Screen()
     data object CodeInput : Screen()
     data object YouTubePlaybackSpike : Screen()
     data class TipperLogin(val returnTo: Screen) : Screen()
@@ -13,6 +14,8 @@ sealed class Screen {
     data class ExplorePlayback(
         val videoId: String,
         val title: String,
+        val eventId: String,
+        val channelId: String,
     ) : Screen()
     data object TipsWallet : Screen()
     data class FullDisplay(val event: Event?) : Screen()

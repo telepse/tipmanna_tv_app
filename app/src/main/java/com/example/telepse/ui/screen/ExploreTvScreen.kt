@@ -44,23 +44,30 @@ import androidx.tv.material3.ExperimentalTvMaterial3Api
 import coil.compose.AsyncImage
 import com.example.telepse.data.model.ExploreFeedItem
 import com.example.telepse.player.YoutubeVideoIdUtil
+import com.example.telepse.ui.moderation.ExploreModerationChipPolicy
+import com.example.telepse.ui.moderation.TvModerationDialogOverlay
+import com.example.telepse.ui.moderation.TvModerationToast
 import com.example.telepse.ui.tv.TvAppColors
 import com.example.telepse.ui.tv.TvLazyColumn
+import com.example.telepse.ui.tv.TvLazyRow
 import com.example.telepse.ui.tv.TvNavButton
 import com.example.telepse.ui.tv.TvPlayerControlChip
 import com.example.telepse.ui.tv.requestInitialTvFocus
 import com.example.telepse.ui.viewmodel.ExploreUiPhase
 import com.example.telepse.ui.viewmodel.ExploreViewModel
+import com.example.telepse.ui.viewmodel.TvModerationViewModel
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun ExploreTvScreen(
     onBack: () -> Unit,
-    onOpenVideo: (videoId: String, title: String) -> Unit,
+    onOpenVideo: (videoId: String, title: String, eventId: String, channelId: String) -> Unit,
     viewModel: ExploreViewModel = hiltViewModel(),
+    moderationViewModel: TvModerationViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val moderationState by moderationViewModel.state.collectAsState()
     val backFocus = remember { FocusRequester() }
     val firstItemFocus = remember { FocusRequester() }
     val loadMoreFocus = remember { FocusRequester() }
@@ -70,6 +77,19 @@ fun ExploreTvScreen(
     }
 
     var initialListFocusDone by remember { mutableStateOf(false) }
+    var focusedItem by remember { mutableStateOf<ExploreFeedItem?>(null) }
+
+    fun openExploreItem(item: ExploreFeedItem) {
+        val videoId = YoutubeVideoIdUtil.fromUrl(item.url).orEmpty()
+        val eventId = item.event?.id?.trim().orEmpty()
+        val channelId = item.id.trim()
+        if (eventId.isEmpty() || channelId.isEmpty()) return
+        viewModel.trackCardActivated(item)
+        onOpenVideo(videoId, item.title, eventId, channelId)
+    }
+
+    val focusedChannelId = focusedItem?.id?.trim().orEmpty()
+    val gridModerationEnabled = ExploreModerationChipPolicy.moderationEnabled(focusedChannelId)
 
     LaunchedEffect(uiState.phase) {
         when (uiState.phase) {
@@ -87,12 +107,16 @@ fun ExploreTvScreen(
         }
     }
 
-    Column(
+    Box(
         modifier =
             Modifier.fillMaxSize()
-                .background(TvAppColors.ScreenBackground)
-                .padding(horizontal = 40.dp, vertical = 28.dp),
+                .background(TvAppColors.ScreenBackground),
     ) {
+        Column(
+            modifier =
+                Modifier.fillMaxSize()
+                    .padding(horizontal = 40.dp, vertical = 28.dp),
+        ) {
         Text(
             text = "Explore",
             color = TvAppColors.TextPrimary,
@@ -103,7 +127,14 @@ fun ExploreTvScreen(
             text = "Trending on Tipmanna",
             color = TvAppColors.TextSecondary,
             fontSize = 16.sp,
-            modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
+            modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+        )
+        Text(
+            text =
+                "Select a video: use Actions (Report / Block) on this screen, or OK on the card to open the player.",
+            color = TvAppColors.TextSecondary.copy(alpha = 0.85f),
+            fontSize = 14.sp,
+            modifier = Modifier.padding(bottom = 12.dp),
         )
 
         when (uiState.phase) {
@@ -142,12 +173,9 @@ fun ExploreTvScreen(
                     uiState.items.forEachIndexed { index, item ->
                         ExploreFeedCard(
                             item = item,
-                            onActivate = {
-                                val videoId =
-                                    YoutubeVideoIdUtil.fromUrl(item.url)
-                                        ?: return@ExploreFeedCard
-                                viewModel.trackCardActivated(item)
-                                onOpenVideo(videoId, item.title)
+                            onActivate = { openExploreItem(item) },
+                            onFocusChanged = { isFocused ->
+                                if (isFocused) focusedItem = item
                             },
                             focusRequester = if (index == 0) firstItemFocus else null,
                             modifier = Modifier.padding(bottom = 12.dp),
@@ -174,6 +202,41 @@ fun ExploreTvScreen(
                         )
                     }
                 }
+                if (focusedItem != null && gridModerationEnabled) {
+                    val host =
+                        focusedItem?.event?.hostName
+                            ?: focusedItem?.event?.username
+                            ?: "Host"
+                    Text(
+                        text = "Actions — $host",
+                        color = TvAppColors.TextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+                    )
+                    TvLazyRow(modifier = Modifier.fillMaxWidth()) {
+                        TvPlayerControlChip(
+                            label = "Open player",
+                            onClick = { focusedItem?.let(::openExploreItem) },
+                            enabled = true,
+                        )
+                        TvPlayerControlChip(
+                            label = "Report video",
+                            onClick = { moderationViewModel.openReportVideoDialog(focusedChannelId) },
+                            enabled = gridModerationEnabled,
+                        )
+                        TvPlayerControlChip(
+                            label = "Report host",
+                            onClick = { moderationViewModel.openReportHostDialog(focusedChannelId) },
+                            enabled = gridModerationEnabled,
+                        )
+                        TvPlayerControlChip(
+                            label = "Block host",
+                            onClick = { moderationViewModel.openBlockHostDialog(focusedChannelId) },
+                            enabled = gridModerationEnabled,
+                        )
+                    }
+                }
                 TvNavButton(
                     text = "Back",
                     onClick = onBack,
@@ -182,6 +245,23 @@ fun ExploreTvScreen(
                 )
             }
         }
+        }
+        moderationState.successMessage?.let { message ->
+            TvModerationToast(
+                message = message,
+                modifier =
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 48.dp),
+            )
+        }
+        if (focusedChannelId.isNotBlank()) {
+            TvModerationDialogOverlay(
+                channelId = focusedChannelId,
+                state = moderationState,
+                moderationViewModel = moderationViewModel,
+            )
+        }
     }
 }
 
@@ -189,6 +269,7 @@ fun ExploreTvScreen(
 private fun ExploreFeedCard(
     item: ExploreFeedItem,
     onActivate: () -> Unit,
+    onFocusChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     focusRequester: FocusRequester? = null,
 ) {
@@ -212,12 +293,18 @@ private fun ExploreFeedCard(
     val videoId = YoutubeVideoIdUtil.fromUrl(item.url)
     val thumbUrl = videoId?.let { "https://img.youtube.com/vi/$it/hqdefault.jpg" }
     val host = item.event?.hostName ?: item.event?.username ?: "Tipmanna"
+    val eventId = item.event?.id?.trim().orEmpty()
+    val channelId = item.id.trim()
+    val canActivate = eventId.isNotEmpty() && channelId.isNotEmpty()
 
     var rowModifier =
         modifier
             .fillMaxWidth()
             .height(120.dp)
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) onFocusChanged(true)
+            }
     if (focusRequester != null) {
         rowModifier = rowModifier.focusRequester(focusRequester)
     }
@@ -225,9 +312,9 @@ private fun ExploreFeedCard(
     Row(
         modifier =
             rowModifier
-                .focusable(enabled = videoId != null)
+                .focusable(enabled = canActivate)
                 .onKeyEvent { event ->
-                    if (videoId == null || event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                    if (!canActivate || event.type != KeyEventType.KeyDown) return@onKeyEvent false
                     when (event.key) {
                         Key.DirectionCenter,
                         Key.Enter,

@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.media3.common.util.UnstableApi
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
@@ -70,6 +71,7 @@ fun CommunityRoomIdScreen(
     }
 }
 
+@UnstableApi
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun CommunityRoomDisplayScreen(

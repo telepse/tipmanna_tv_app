@@ -1,5 +1,7 @@
 package com.example.telepse.ui.navigation
 
+import com.example.telepse.premvp.PreMvpFeatureFlags
+
 /**
  * Cold start must always compose [Screen.JourneyHub] first so MainActivity can report
  * the first frame before heavy Screen Display (WebView / Pusher) work begins.
@@ -25,6 +27,7 @@ fun shouldScheduleScreenDisplayRestoreOnStart(
     savedEventId: String?,
     currentScreen: Screen,
 ): Boolean {
+    if (PreMvpFeatureFlags.deferScreenDisplayAutoRestore) return false
     if (isFirstOnStartSinceProcessLaunched) return false
     if (savedEventId.isNullOrBlank()) return false
     return currentScreen is Screen.JourneyHub

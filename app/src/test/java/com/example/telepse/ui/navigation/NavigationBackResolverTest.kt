@@ -9,7 +9,12 @@ class NavigationBackResolverTest {
         assertEquals(
             Screen.ExplorePlaceholder,
             NavigationBackResolver.resolveBack(
-                Screen.ExplorePlayback(videoId = "abc", title = "T"),
+                Screen.ExplorePlayback(
+                    videoId = "abc",
+                    title = "T",
+                    eventId = "11111111-1111-4111-8111-111111111111",
+                    channelId = "22222222-2222-4222-8222-222222222222",
+                ),
             ),
         )
     }
